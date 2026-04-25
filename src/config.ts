@@ -20,7 +20,7 @@ export const DEFAULT_PORT = Number(process.env.ROUTSTRD_AUTH_PORT) || 8008;
 
 /** Default upstream (routstrd daemon) — must be local-only. */
 export const DEFAULT_UPSTREAM =
-  process.env.ROUTSTRD_UPSTREAM || "http://localhost:8009";
+  process.env.ROUTSTRD_UPSTREAM || "http://localhost:8008";
 
 /** Default host for the auth proxy. */
 export const DEFAULT_HOST = process.env.ROUTSTRD_AUTH_HOST || "0.0.0.0";
