@@ -1,0 +1,8 @@
+# Temporary port override
+# This file is automatically picked up by docker compose.
+# Remove it when you no longer need this mapping.
+services:
+  routstrd:
+    ports:
+      - "8009:8008"
+
