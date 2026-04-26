@@ -45,6 +45,10 @@ program
     console.log(`  Host:     ${cfg.host}`);
     console.log(`  Upstream: ${cfg.upstream}`);
     console.log(`  DB path:  ${cfg.dbPath}`);
+    console.log(`  Admin npubs/pubkeys: ${cfg.adminPubkeys.length}`);
+    if (cfg.adminPubkeys.length === 0) {
+      console.log("  Warning: no admin npub/pubkey configured; /clients/add is disabled.");
+    }
 
     const err = validateConfig(cfg);
     if (err) {
@@ -58,7 +62,7 @@ program
     const hasAny = store.hasAnyClients();
     store.close();
 
-    console.log(`\n✅ DB accessible. ${hasAny ? "Clients exist." : "No clients yet (bootstrap mode enabled)."}`);
+    console.log(`\n✅ DB accessible. ${hasAny ? "Clients exist." : "No clients yet."}`);
   });
 
 program.parse();

@@ -69,17 +69,10 @@ export class AuthProxy {
     const path = url.pathname;
     const authorization = req.headers.get("authorization");
 
-    const hasAny = this.hasClients();
-    const isPublicPath = AuthProxy.PUBLIC_PATHS.has(path) ||
-      AuthProxy.PUBLIC_PREFIXES.some((p) => path.startsWith(p));
+    const isPublicPath = AuthProxy.isPublicPath(path);
 
     // --- Public path: forward immediately ---
     if (isPublicPath) {
-      return this.forward(req);
-    }
-
-    // --- Bootstrap: POST /clients/add with no clients yet ---
-    if (path === "/clients/add" && !hasAny) {
       return this.forward(req);
     }
 
@@ -100,6 +93,19 @@ export class AuthProxy {
 
     const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
     if (bearerMatch) {
+      if (AuthProxy.isAdminPath(path)) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
       const apiKey = bearerMatch[1]!;
       const client = this.store.findByApiKey(apiKey);
       if (!client) {
@@ -126,6 +132,21 @@ export class AuthProxy {
 
       try {
         const { pubkey } = await validateNIP98Request(authorization, req, body);
+
+        if (AuthProxy.isAdminPath(path) && !this.isAdminPubkey(pubkey)) {
+          return new Response(
+            JSON.stringify({
+              error: this.config.adminPubkeys.length === 0
+                ? "This endpoint requires an admin npub/pubkey, but none is configured. Set ROUTSTRD_AUTH_ADMIN_NPUBS or ROUTSTRD_AUTH_ADMIN_PUBKEYS."
+                : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+            }),
+            {
+              status: 403,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
         return this.forward(req, { nostrPubkey: pubkey }, body);
       } catch (err) {
         return new Response(
@@ -158,6 +179,13 @@ export class AuthProxy {
     console.log(`routstrd-auth proxy listening on http://${host}:${port}`);
     console.log(`  Upstream: ${this.config.upstream}`);
     console.log(`  DB path:  ${this.config.dbPath}`);
+    console.log(`  Admin npubs/pubkeys: ${this.config.adminPubkeys.length}`);
+    if (this.config.adminPubkeys.length === 0) {
+      console.warn(
+        "  Warning: no admin npub/pubkey configured; /clients/add is disabled. " +
+          "Set ROUTSTRD_AUTH_ADMIN_NPUBS or ROUTSTRD_AUTH_ADMIN_PUBKEYS.",
+      );
+    }
 
     Bun.serve({
       port,
@@ -183,23 +211,32 @@ export class AuthProxy {
     this.store.close();
   }
 
-  /** Public endpoints that don't require auth. */
+  private isAdminPubkey(pubkey: string): boolean {
+    return this.config.adminPubkeys.includes(pubkey.toLowerCase());
+  }
+
+  /** Minimal public endpoints that don't require auth. */
   static PUBLIC_PATHS = new Set([
     "/health",
     "/ping",
-    "/status",
-    "/wallet/status",
-    "/wallet/balance",
-    "/wallet/mints",
     "/models",
     "/v1/models",
-    "/balance",
-    "/keys/balance",
-    "/providers",
-    "/usage",
-    "/usagePi",
   ]);
 
   /** Public path prefixes. */
-  static PUBLIC_PREFIXES = ["/models/", "/wallet/"];
+  static PUBLIC_PREFIXES = ["/models/", "/v1/models/"];
+
+  /** Endpoints that require an admin NIP-98 identity, not just any auth. */
+  static ADMIN_PATHS = new Set([
+    "/clients/add",
+  ]);
+
+  static isPublicPath(path: string): boolean {
+    if (AuthProxy.PUBLIC_PATHS.has(path)) return true;
+    return AuthProxy.PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
+  }
+
+  static isAdminPath(path: string): boolean {
+    return AuthProxy.ADMIN_PATHS.has(path);
+  }
 }

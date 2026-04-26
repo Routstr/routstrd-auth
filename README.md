@@ -27,6 +27,8 @@ All values have sensible defaults and can be overridden via environment variable
 | `ROUTSTRD_UPSTREAM` | `http://localhost:8009` | Upstream routstrd URL |
 | `ROUTSTRD_DB_PATH` | `~/.routstrd/routstr.db` | Shared SQLite DB |
 | `ROUTSTRD_DIR` | `~/.routstrd` | Base config directory |
+| `ROUTSTRD_AUTH_ADMIN_NPUBS` | unset | Comma/space-separated admin `npub...` values allowed to call admin endpoints like `/clients/add` |
+| `ROUTSTRD_AUTH_ADMIN_PUBKEYS` | unset | Comma/space-separated admin 64-char hex Nostr pubkeys; alternative to `ROUTSTRD_AUTH_ADMIN_NPUBS` |
 
 ## Usage
 
@@ -55,11 +57,11 @@ bun run src/index.ts start -d /path/to/routstr.db
 
 ## Auth behaviour
 
-- **Public endpoints** (health, models, balance, etc.) — forwarded immediately, no token needed.
-- **Protected endpoints** — require either:
+- **Public endpoints** — `/health`, `/ping`, `/models`, `/v1/models`, and model-detail paths under `/models/` or `/v1/models/` are forwarded immediately with no token.
+- **Protected endpoints** — every other endpoint requires either:
   - a valid `Bearer` token that exists in the shared DB; or
   - a valid NIP-98 event in `Authorization: Nostr <base64-event>`.
-- **Bootstrap** — `POST /clients/add` is allowed without auth when the DB has zero clients.
+- **Admin endpoints** — `POST /clients/add` always requires NIP-98 auth from a configured admin Nostr pubkey. Bearer tokens are not accepted for this endpoint, and there is no unauthenticated bootstrap mode.
 - **Forwarded headers** — the proxy strips `Authorization` before proxying.
   - Bearer auth injects `x-routstr-client-id: <clientId>`.
   - NIP-98 auth injects `x-routstr-nostr-pubkey: <pubkey>` and `x-routstr-client-id: nostr:<pubkey>`.
@@ -81,6 +83,18 @@ Authorization: Nostr <base64-event-json>
 The proxy validates kind, timestamp (±60s), URL, method, body hash, and signature. On success the authenticated identity is the event `pubkey`.
 
 See [`NIP98.md`](./NIP98.md) for details.
+
+## Admin bootstrap
+
+Because `/clients/add` is protected from the first request, configure at least one admin Nostr identity before exposing the proxy:
+
+```bash
+export ROUTSTRD_AUTH_ADMIN_NPUBS="npub1..."
+# or use raw hex pubkeys:
+export ROUTSTRD_AUTH_ADMIN_PUBKEYS="<64-char-hex-pubkey>"
+```
+
+Then create clients by sending `POST /clients/add` with a valid NIP-98 `Authorization: Nostr ...` header signed by one of those configured admin keys. The proxy forwards the request to routstrd only after verifying the signature and checking the pubkey against the admin list.
 
 ## License
 

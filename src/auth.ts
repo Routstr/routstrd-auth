@@ -3,26 +3,16 @@ import type { Client } from "./store";
 
 /**
  * Public endpoints that don't require auth.
- * Matches routstrd's public endpoints exactly.
+ * Everything else is default-deny and requires Bearer or NIP-98 auth.
  */
 const PUBLIC_PATHS = new Set([
   "/health",
   "/ping",
-  "/status",
-  "/wallet/status",
-  "/wallet/balance",
-  "/wallet/mints",
   "/models",
   "/v1/models",
-  "/balance",
-  "/keys/balance",
-  "/providers",
-  "/usage",
-  "/usagePi",
 ]);
 
-/** Endpoints with the `/models/` prefix. */
-const PUBLIC_PREFIXES = ["/models/", "/wallet/"];
+const PUBLIC_PREFIXES = ["/models/", "/v1/models/"];
 
 export interface AuthResult {
   authenticated: boolean;
@@ -53,11 +43,6 @@ export function authenticate(
   // Check if the path is public.
   if (isPublicPath(path)) {
     return { authenticated: true, isPublicPath: true };
-  }
-
-  // Bootstrap: POST /clients/add is allowed with no auth when no clients exist.
-  if (path === "/clients/add" && !hasClients) {
-    return { authenticated: true, isPublicPath: false };
   }
 
   // --- Auth required from here ---
@@ -92,10 +77,6 @@ export async function authenticateRequest(
 ): Promise<AuthResult> {
   if (isPublicPath(path)) {
     return { authenticated: true, isPublicPath: true };
-  }
-
-  if (path === "/clients/add" && !hasClients) {
-    return { authenticated: true, isPublicPath: false };
   }
 
   const authorization = req.headers.get("authorization");
