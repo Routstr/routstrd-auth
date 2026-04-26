@@ -5,8 +5,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
-    "client": "bun run src/nip98-client.ts",
-    "build": "bun build src/index.ts src/nip98-client.ts --outdir dist --target bun"
+    "build": "bun build src/index.ts --outdir dist --target bun"
   },
   "dependencies": {
     "commander": "^14.0.2",
