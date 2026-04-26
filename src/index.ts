@@ -5,7 +5,7 @@ import { AuthProxy } from "./proxy";
 
 program
   .name("routstrd-auth")
-  .description("Auth proxy for routstrd — validates Bearer tokens and forwards requests")
+  .description("Auth proxy for routstrd — validates Bearer tokens or NIP-98 Nostr auth and forwards requests")
   .version("0.1.0");
 
 program

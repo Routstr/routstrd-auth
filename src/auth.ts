@@ -1,3 +1,4 @@
+import { validateNIP98Request } from "./nip98";
 import type { Client } from "./store";
 
 /**
@@ -26,12 +27,22 @@ const PUBLIC_PREFIXES = ["/models/", "/wallet/"];
 export interface AuthResult {
   authenticated: boolean;
   client?: Client;
+  nostrPubkey?: string;
   // If true, the path is public and no auth is needed.
   isPublicPath: boolean;
 }
 
+export function isPublicPath(path: string): boolean {
+  if (PUBLIC_PATHS.has(path)) return true;
+  return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 /**
  * Determine if a path needs auth and validate the Bearer token.
+ *
+ * Kept for compatibility with callers that only need synchronous Bearer auth.
+ * The proxy itself also supports NIP-98 because that requires request URL/body
+ * validation and is therefore asynchronous.
  */
 export function authenticate(
   authorization: string | null,
@@ -40,14 +51,8 @@ export function authenticate(
   findClient: (apiKey: string) => Client | null,
 ): AuthResult {
   // Check if the path is public.
-  if (PUBLIC_PATHS.has(path)) {
+  if (isPublicPath(path)) {
     return { authenticated: true, isPublicPath: true };
-  }
-
-  for (const prefix of PUBLIC_PREFIXES) {
-    if (path.startsWith(prefix)) {
-      return { authenticated: true, isPublicPath: true };
-    }
   }
 
   // Bootstrap: POST /clients/add is allowed with no auth when no clients exist.
@@ -73,4 +78,47 @@ export function authenticate(
   }
 
   return { authenticated: true, isPublicPath: false, client };
+}
+
+/**
+ * Full auth helper that supports Bearer and NIP-98.
+ */
+export async function authenticateRequest(
+  req: Request,
+  path: string,
+  hasClients: boolean,
+  findClient: (apiKey: string) => Client | null,
+  body?: Uint8Array,
+): Promise<AuthResult> {
+  if (isPublicPath(path)) {
+    return { authenticated: true, isPublicPath: true };
+  }
+
+  if (path === "/clients/add" && !hasClients) {
+    return { authenticated: true, isPublicPath: false };
+  }
+
+  const authorization = req.headers.get("authorization");
+  if (!authorization) {
+    return { authenticated: false, isPublicPath: false };
+  }
+
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
+  if (bearerMatch) {
+    const client = findClient(bearerMatch[1]!);
+    return client
+      ? { authenticated: true, isPublicPath: false, client }
+      : { authenticated: false, isPublicPath: false };
+  }
+
+  if (authorization.match(/^Nostr\s+(.+)$/i)) {
+    try {
+      const { pubkey } = await validateNIP98Request(authorization, req, body);
+      return { authenticated: true, isPublicPath: false, nostrPubkey: pubkey };
+    } catch {
+      return { authenticated: false, isPublicPath: false };
+    }
+  }
+
+  return { authenticated: false, isPublicPath: false };
 }

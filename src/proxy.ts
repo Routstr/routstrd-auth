@@ -1,9 +1,10 @@
 import type { AuthProxyConfig } from "./config";
+import { validateNIP98Request } from "./nip98";
 import { AuthStore } from "./store";
 
 /**
- * Thin proxy that validates Bearer tokens and forwards requests
- * to the routstrd daemon running on localhost only.
+ * Thin proxy that validates Bearer tokens or NIP-98 Nostr HTTP auth events and
+ * forwards requests to the routstrd daemon running on localhost only.
  */
 export class AuthProxy {
   private config: AuthProxyConfig;
@@ -21,9 +22,13 @@ export class AuthProxy {
 
   /**
    * Forward a request to the upstream routstrd daemon.
-   * Optionally injects an x-routstr-client-id header.
+   * Optionally injects client identity headers.
    */
-  private async forward(req: Request, clientId?: string): Promise<Response> {
+  private async forward(
+    req: Request,
+    identity?: { clientId?: string; nostrPubkey?: string },
+    body?: Uint8Array,
+  ): Promise<Response> {
     const url = new URL(req.url);
     const upstreamUrl = `${this.config.upstream}${url.pathname}${url.search}`;
 
@@ -32,20 +37,26 @@ export class AuthProxy {
     headers.delete("authorization");
     headers.delete("host");
     // Inject client identity if available.
-    if (clientId) {
-      headers.set("x-routstr-client-id", clientId);
+    if (identity?.clientId) {
+      headers.set("x-routstr-client-id", identity.clientId);
+    }
+    if (identity?.nostrPubkey) {
+      headers.set("x-routstr-nostr-pubkey", identity.nostrPubkey);
+      // Also set x-routstr-client-id so existing upstream code that keys off a
+      // single client-id header can identify NIP-98 users without changes.
+      headers.set("x-routstr-client-id", `nostr:${identity.nostrPubkey}`);
     }
 
-    const body =
+    const requestBody =
       req.method === "GET" || req.method === "HEAD"
         ? undefined
-        : req.body;
+        : body ?? req.body;
 
     try {
       return await fetch(upstreamUrl, {
         method: req.method,
         headers,
-        body,
+        body: requestBody,
       });
     } catch {
       return new Response("Upstream unreachable", { status: 502 });
@@ -78,7 +89,7 @@ export class AuthProxy {
         JSON.stringify({
           error:
             "Missing Authorization header. " +
-            "Use 'Authorization: Bearer sk-...' or set ROUTSTRD_API_KEY.",
+            "Use 'Authorization: Bearer sk-...' or 'Authorization: Nostr <base64-event>'.",
         }),
         {
           status: 401,
@@ -88,31 +99,57 @@ export class AuthProxy {
     }
 
     const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
-    if (!bearerMatch) {
-      return new Response(
-        JSON.stringify({
-          error: "Invalid Authorization format. Expected 'Bearer sk-...'.",
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+    if (bearerMatch) {
+      const apiKey = bearerMatch[1]!;
+      const client = this.store.findByApiKey(apiKey);
+      if (!client) {
+        return new Response(
+          JSON.stringify({ error: "Invalid API key." }),
+          {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return this.forward(req, { clientId: client.clientId });
     }
 
-    const apiKey = bearerMatch[1]!;
-    const client = this.store.findByApiKey(apiKey);
-    if (!client) {
-      return new Response(
-        JSON.stringify({ error: "Invalid API key." }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+    const nip98Match = authorization.match(/^Nostr\s+(.+)$/i);
+    if (nip98Match) {
+      // The request body stream can be consumed only once. Buffer it so NIP-98
+      // can verify the payload hash and the same bytes can still be forwarded.
+      const body =
+        req.method === "GET" || req.method === "HEAD"
+          ? undefined
+          : new Uint8Array(await req.arrayBuffer());
+
+      try {
+        const { pubkey } = await validateNIP98Request(authorization, req, body);
+        return this.forward(req, { nostrPubkey: pubkey }, body);
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
+          }),
+          {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
     }
 
-    return this.forward(req, client.clientId);
+    return new Response(
+      JSON.stringify({
+        error:
+          "Invalid Authorization format. Expected 'Bearer sk-...' or 'Nostr <base64-event>'.",
+      }),
+      {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
 
   /** Start the Bun HTTP server. */
