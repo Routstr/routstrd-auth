@@ -11,32 +11,49 @@ mkdir -p /data/logs
 echo "Ensuring cocod wallet is initialized..."
 cocod init </dev/null 2>&1 || true
 
-# Build the start command
-if [ -n "$PORT" ]; then
-  set -- routstrd start --port "$PORT"
-else
-  set -- routstrd start
-fi
+# routstrd stays local to the container. routstrd-auth is the public service.
+ROUTSTRD_PORT="${ROUTSTRD_PORT:-${PORT:-8008}}"
+ROUTSTRD_AUTH_PORT="${ROUTSTRD_AUTH_PORT:-8080}"
+ROUTSTRD_AUTH_HOST="${ROUTSTRD_AUTH_HOST:-0.0.0.0}"
+ROUTSTRD_UPSTREAM="${ROUTSTRD_UPSTREAM:-http://localhost:${ROUTSTRD_PORT}}"
+ROUTSTRD_AUTH_ADMIN_NPUBS="${ROUTSTRD_AUTH_ADMIN_NPUBS:-npub1l3m0300w4lph5kjfnvazgpj8wnv2tgpv9xdxft9qwt8ccmyz0v0s58tptp}"
+export ROUTSTRD_AUTH_PORT ROUTSTRD_AUTH_HOST ROUTSTRD_UPSTREAM ROUTSTRD_AUTH_ADMIN_NPUBS
 
-echo "Starting daemon..."
-"$@" &
-
-# Wait for the daemon to be ready, then stay alive as PID 1
-WAIT=0
-while [ $WAIT -lt 30 ]; do
-  if curl -sf http://localhost:${PORT:-8008}/health > /dev/null 2>&1; then
-    echo "Daemon is ready."
-    break
+_term() {
+  echo "Shutting down..."
+  if [ -n "${AUTH_PID:-}" ]; then
+    kill "$AUTH_PID" 2>/dev/null || true
   fi
-  WAIT=$((WAIT + 1))
-  sleep 1
+  routstrd stop 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap _term INT TERM
+
+# Start the routstrd daemon first. The CLI daemonizes and exits after starting
+# the real daemon, so do not monitor this shell child as the service lifetime.
+echo "Starting routstrd daemon on localhost:${ROUTSTRD_PORT}..."
+routstrd start --port "$ROUTSTRD_PORT"
+
+# Start routstrd-auth as the public-facing service.
+echo "Starting routstrd-auth on ${ROUTSTRD_AUTH_HOST}:${ROUTSTRD_AUTH_PORT}..."
+echo "routstrd-auth upstream: ${ROUTSTRD_UPSTREAM}"
+bun run /app/src/index.ts start &
+AUTH_PID=$!
+
+# Keep PID 1 alive while routstrd-auth is running. Also periodically verify
+# that the internal routstrd daemon remains reachable.
+while :; do
+  if ! kill -0 "$AUTH_PID" 2>/dev/null; then
+    echo "routstrd-auth exited."
+    wait "$AUTH_PID"
+    exit $?
+  fi
+
+  if ! bun -e "const r=await fetch('http://localhost:${ROUTSTRD_PORT}/health');process.exit(r.ok?0:1)" >/dev/null 2>&1; then
+    echo "routstrd daemon health check failed."
+    kill "$AUTH_PID" 2>/dev/null || true
+    exit 1
+  fi
+
+  sleep 5
 done
-
-if [ $WAIT -ge 30 ]; then
-  echo "Daemon is taking longer than expected, please wait..."
-  echo "Tip: run 'cocod logs --follow' or 'tail -n 40 ~/.cocod/daemon.log' in another terminal."
-fi
-
-# Keep the entrypoint alive so the container doesn't restart.
-# The shell stays alive as PID 1, acting as the init process.
-tail -f /dev/null

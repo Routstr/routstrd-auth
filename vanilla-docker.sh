@@ -5,7 +5,7 @@
    docker run -d \
      --name routstrd \
      --restart unless-stopped \
-     -p 8009:8008 \
+     -p 8009:8080 \
      -v routstrd-data:/data \
      routstrd
 

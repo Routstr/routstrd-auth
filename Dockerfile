@@ -17,15 +17,28 @@ ENV HOME=/data
 ENV ROUTSTRD_DIR=/data
 RUN mkdir -p /data && chmod 755 /data
 
-VOLUME ["/data"]
-EXPOSE 8008
+# Install routstrd-auth into the image.
+WORKDIR /app
+COPY package.json bun.lockb ./
+RUN bun install --frozen-lockfile --production
+COPY src ./src
 
-# Healthcheck using Bun itself (no curl needed)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD bun -e "const r=await fetch('http://localhost:8008/health');process.exit(r.ok?0:1)"
+# routstrd listens inside the container on 8008.
+# routstrd-auth is the public service exposed by Docker on 8080.
+ENV ROUTSTRD_PORT=8008
+ENV ROUTSTRD_AUTH_PORT=8080
+ENV ROUTSTRD_AUTH_HOST=0.0.0.0
+ENV ROUTSTRD_UPSTREAM=http://localhost:8008
+ENV ROUTSTRD_AUTH_ADMIN_NPUBS=npub1l3m0300w4lph5kjfnvazgpj8wnv2tgpv9xdxft9qwt8ccmyz0v0s58tptp
+
+VOLUME ["/data"]
+EXPOSE 8080
+
+# Healthcheck the public auth proxy, not the direct routstrd port.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD bun -e "const p=process.env.ROUTSTRD_AUTH_PORT||8080;const r=await fetch('http://localhost:'+p+'/health');process.exit(r.ok?0:1)"
 
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["--port", "8008"]
