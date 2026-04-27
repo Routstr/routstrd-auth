@@ -128,7 +128,7 @@ bun run src/index.ts start -d /path/to/routstr.db
 
 `src/nip98-client.ts` signs each request with a Nostr private key and can add a client through `/clients/add`, then fetch `/clients` and print the current list.
 
-The private key must belong to one of the configured admin pubkeys (`ROUTSTRD_AUTH_ADMIN_NPUBS` or `ROUTSTRD_AUTH_ADMIN_PUBKEYS`) because `/clients/add` is admin-only.
+The private key must belong to one of the configured admin pubkeys (`ROUTSTRD_AUTH_ADMIN_NPUBS`, `ROUTSTRD_AUTH_ADMIN_PUBKEYS`, or an admin added through `POST /npubs`) because `/clients/add` is admin-only.
 
 ```bash
 # Add a client, then list all clients
@@ -158,7 +158,10 @@ The helper creates `Authorization: Nostr <base64-event>` headers whose signed ev
 
 - **Public endpoints** (health, models, balance, etc.) — forwarded immediately, no token needed.
 - **Protected endpoints** — require a valid `Bearer` token that exists in the shared DB.
-- **Bootstrap** — `POST /clients/add` is allowed without auth when the DB has zero clients.
+- **Admin npubs** — stored in the shared `routstr.db` table `routstr_auth_admins`. Env-configured admins are bootstrapped into that table at startup.
+- **List admins** — `GET /npubs` returns `{ "npubs": [...] }` with the configured admin npubs.
+- **Add admins** — `POST /npubs` with `{ "npub": "npub1..." }` or `{ "pubkey": "<64-char hex>" }`. If no admins are configured yet, this first add is unauthenticated; after that it requires NIP-98 auth from an existing admin.
+- **Remove admins** — `DELETE /npubs/<npub-or-pubkey>` (or `DELETE /npubs?npub=...`) requires NIP-98 auth from an existing admin.
 - **Forwarded headers** — the proxy strips `Authorization` and injects `x-routstr-client-id` so the daemon knows which client made the request.
 
 ## License

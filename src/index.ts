@@ -45,10 +45,7 @@ program
     console.log(`  Host:     ${cfg.host}`);
     console.log(`  Upstream: ${cfg.upstream}`);
     console.log(`  DB path:  ${cfg.dbPath}`);
-    console.log(`  Admin npubs/pubkeys: ${cfg.adminPubkeys.length}`);
-    if (cfg.adminPubkeys.length === 0) {
-      console.log("  Warning: no admin npub/pubkey configured; /clients/add is disabled.");
-    }
+    console.log(`  Bootstrap admin npubs/pubkeys from env: ${cfg.adminPubkeys.length}`);
 
     const err = validateConfig(cfg);
     if (err) {
@@ -58,11 +55,12 @@ program
 
     // Try opening the DB to verify schema exists.
     const { AuthStore } = require("./store");
-    const store = new AuthStore(cfg.dbPath);
+    const store = new AuthStore(cfg.dbPath, cfg.adminPubkeys);
     const hasAny = store.hasAnyClients();
+    const adminCount = store.countAdminNpubs();
     store.close();
 
-    console.log(`\n✅ DB accessible. ${hasAny ? "Clients exist." : "No clients yet."}`);
+    console.log(`\n✅ DB accessible. ${hasAny ? "Clients exist." : "No clients yet."} ${adminCount} admin npub(s) configured.`);
   });
 
 program.parse();

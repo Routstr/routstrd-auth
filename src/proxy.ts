@@ -1,4 +1,4 @@
-import type { AuthProxyConfig } from "./config";
+import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
 import { validateNIP98Request } from "./nip98";
 import { AuthStore } from "./store";
 
@@ -12,12 +12,7 @@ export class AuthProxy {
 
   constructor(config: AuthProxyConfig) {
     this.config = config;
-    this.store = new AuthStore(config.dbPath);
-  }
-
-  /** Check whether the clients table is empty (bootstrap mode). */
-  private hasClients(): boolean {
-    return this.store.hasAnyClients();
+    this.store = new AuthStore(config.dbPath, config.adminPubkeys);
   }
 
   /**
@@ -63,11 +58,162 @@ export class AuthProxy {
     }
   }
 
+  private json(data: unknown, status = 200): Response {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  private parseNpubBody(body: Uint8Array): string | Response {
+    if (body.byteLength === 0) {
+      return this.json({ error: "Request body is required. Provide { \"npub\": \"npub1...\" } or { \"pubkey\": \"<64-char hex>\" }." }, 400);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(body));
+    } catch {
+      return this.json({ error: "Invalid JSON body." }, 400);
+    }
+
+    const value = typeof parsed === "string"
+      ? parsed
+      : parsed && typeof parsed === "object"
+        ? (parsed as { npub?: unknown; pubkey?: unknown }).npub ??
+          (parsed as { npub?: unknown; pubkey?: unknown }).pubkey
+        : null;
+
+    if (typeof value !== "string") {
+      return this.json({ error: "Body must include an npub or pubkey string." }, 400);
+    }
+
+    const pubkey = normalizeNostrPubkey(value);
+    if (!pubkey) {
+      return this.json({ error: "Invalid npub/pubkey. Use npub or 64-char hex pubkey." }, 400);
+    }
+
+    return pubkey;
+  }
+
+  private async authenticateAdminNip98(
+    req: Request,
+    authorization: string | null,
+    body?: Uint8Array,
+  ): Promise<{ pubkey: string } | Response> {
+    if (!authorization) {
+      return this.json({
+        error:
+          "Missing Authorization header. This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+      }, 401);
+    }
+
+    if (authorization.match(/^Bearer\s+(.+)$/i)) {
+      return this.json({
+        error: "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+      }, 403);
+    }
+
+    if (!authorization.match(/^Nostr\s+(.+)$/i)) {
+      return this.json({
+        error: "Invalid Authorization format. Expected 'Nostr <base64-event>'.",
+      }, 401);
+    }
+
+    try {
+      const { pubkey } = await validateNIP98Request(authorization, req, body);
+      if (!this.isAdminPubkey(pubkey)) {
+        return this.json({
+          error: this.store.countAdminNpubs() === 0
+            ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with POST /npubs."
+            : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+        }, 403);
+      }
+
+      return { pubkey };
+    } catch (err) {
+      return this.json({
+        error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
+      }, 401);
+    }
+  }
+
+  private async handleNpubs(req: Request, path: string): Promise<Response> {
+    if (req.method === "GET" && path === "/npubs") {
+      return this.json({ npubs: this.store.listAdminNpubs().map((admin) => admin.npub) });
+    }
+
+    if (req.method === "POST" && path === "/npubs") {
+      const body = new Uint8Array(await req.arrayBuffer());
+      const hasAdmins = this.store.countAdminNpubs() > 0;
+      let createdBy: string | null = null;
+
+      if (hasAdmins) {
+        const auth = await this.authenticateAdminNip98(
+          req,
+          req.headers.get("authorization"),
+          body,
+        );
+        if (auth instanceof Response) return auth;
+        createdBy = auth.pubkey;
+      }
+
+      const pubkey = this.parseNpubBody(body);
+      if (pubkey instanceof Response) return pubkey;
+
+      const admin = this.store.addAdminPubkey(pubkey, createdBy);
+      return this.json({
+        npub: admin.npub,
+        pubkey: admin.pubkey,
+        added: admin.added,
+      }, admin.added ? 201 : 200);
+    }
+
+    if (req.method === "DELETE" && (path === "/npubs" || path.startsWith("/npubs/"))) {
+      const body = req.method === "GET" || req.method === "HEAD"
+        ? undefined
+        : new Uint8Array(await req.arrayBuffer());
+      const auth = await this.authenticateAdminNip98(
+        req,
+        req.headers.get("authorization"),
+        body,
+      );
+      if (auth instanceof Response) return auth;
+
+      const url = new URL(req.url);
+      const rawValue = path.startsWith("/npubs/")
+        ? decodeURIComponent(path.slice("/npubs/".length))
+        : url.searchParams.get("npub") ?? url.searchParams.get("pubkey");
+
+      let pubkey: string | Response | null = rawValue
+        ? normalizeNostrPubkey(rawValue)
+        : null;
+
+      if (!pubkey && body && body.byteLength > 0) {
+        pubkey = this.parseNpubBody(body);
+        if (pubkey instanceof Response) return pubkey;
+      }
+
+      if (!pubkey) {
+        return this.json({ error: "Provide the admin to remove in /npubs/<npub>, ?npub=..., or the JSON body." }, 400);
+      }
+
+      const removed = this.store.removeAdminPubkey(pubkey);
+      return this.json({ removed });
+    }
+
+    return this.json({ error: "Not found." }, 404);
+  }
+
   /** Handle a single incoming request. */
   async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
     const authorization = req.headers.get("authorization");
+
+    if (path === "/npubs" || path.startsWith("/npubs/")) {
+      return this.handleNpubs(req, path);
+    }
 
     const isPublicPath = AuthProxy.isPublicPath(path);
 
@@ -78,44 +224,26 @@ export class AuthProxy {
 
     // --- Auth required ---
     if (!authorization) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Missing Authorization header. " +
-            "Use 'Authorization: Bearer sk-...' or 'Authorization: Nostr <base64-event>'.",
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      return this.json({
+        error:
+          "Missing Authorization header. " +
+          "Use 'Authorization: Bearer sk-...' or 'Authorization: Nostr <base64-event>'.",
+      }, 401);
     }
 
     const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
     if (bearerMatch) {
       if (AuthProxy.isAdminPath(path)) {
-        return new Response(
-          JSON.stringify({
-            error:
-              "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
-          }),
-          {
-            status: 403,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        return this.json({
+          error:
+            "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+        }, 403);
       }
 
       const apiKey = bearerMatch[1]!;
       const client = this.store.findByApiKey(apiKey);
       if (!client) {
-        return new Response(
-          JSON.stringify({ error: "Invalid API key." }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        return this.json({ error: "Invalid API key." }, 401);
       }
 
       return this.forward(req, { clientId: client.clientId });
@@ -134,56 +262,39 @@ export class AuthProxy {
         const { pubkey } = await validateNIP98Request(authorization, req, body);
 
         if (AuthProxy.isAdminPath(path) && !this.isAdminPubkey(pubkey)) {
-          return new Response(
-            JSON.stringify({
-              error: this.config.adminPubkeys.length === 0
-                ? "This endpoint requires an admin npub/pubkey, but none is configured. Set ROUTSTRD_AUTH_ADMIN_NPUBS or ROUTSTRD_AUTH_ADMIN_PUBKEYS."
-                : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
-            }),
-            {
-              status: 403,
-              headers: { "Content-Type": "application/json" },
-            },
-          );
+          return this.json({
+            error: this.store.countAdminNpubs() === 0
+              ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with POST /npubs."
+              : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
+          }, 403);
         }
 
         return this.forward(req, { nostrPubkey: pubkey }, body);
       } catch (err) {
-        return new Response(
-          JSON.stringify({
-            error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
-          }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        return this.json({
+          error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
+        }, 401);
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        error:
-          "Invalid Authorization format. Expected 'Bearer sk-...' or 'Nostr <base64-event>'.",
-      }),
-      {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
+    return this.json({
+      error:
+        "Invalid Authorization format. Expected 'Bearer sk-...' or 'Nostr <base64-event>'.",
+    }, 401);
   }
 
   /** Start the Bun HTTP server. */
   serve() {
     const { port, host } = this.config;
+    const adminCount = this.store.countAdminNpubs();
     console.log(`routstrd-auth proxy listening on http://${host}:${port}`);
     console.log(`  Upstream: ${this.config.upstream}`);
     console.log(`  DB path:  ${this.config.dbPath}`);
-    console.log(`  Admin npubs/pubkeys: ${this.config.adminPubkeys.length}`);
-    if (this.config.adminPubkeys.length === 0) {
+    console.log(`  Admin npubs/pubkeys: ${adminCount}`);
+    if (adminCount === 0) {
       console.warn(
-        "  Warning: no admin npub/pubkey configured; /clients/add is disabled. " +
-          "Set ROUTSTRD_AUTH_ADMIN_NPUBS or ROUTSTRD_AUTH_ADMIN_PUBKEYS.",
+        "  Warning: no admin npub/pubkey configured. " +
+          "The first admin can be added without auth using POST /npubs.",
       );
     }
 
@@ -212,7 +323,7 @@ export class AuthProxy {
   }
 
   private isAdminPubkey(pubkey: string): boolean {
-    return this.config.adminPubkeys.includes(pubkey.toLowerCase());
+    return this.store.hasAdminPubkey(pubkey);
   }
 
   /** Minimal public endpoints that don't require auth. */
