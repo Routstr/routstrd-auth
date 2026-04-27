@@ -1,44 +1,48 @@
 # syntax=docker/dockerfile:1
-FROM oven/bun:1.2
+FROM cloudron/base:5.0.0@sha256:04fd70dbd8ad6149c19de39e35718e024417c3e01dc9c6637eaf4a41ec4e596c
 
 USER root
 
-# Install routstrd daemon + cocod wallet CLI globally
-# Both are published to npm; bun handles dependencies automatically
-RUN bun install --global @routstr/cocod routstrd
+# Install Bun into a location that remains readable/executable by the
+# non-root cloudron user at runtime.
+ENV BUN_INSTALL=/usr/local/bun
+ENV PATH="/usr/local/bun/bin:/usr/local/bin:${PATH}"
 
-# Make global bun binaries available on PATH
-ENV PATH="/root/.bun/bin:${PATH}"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates unzip \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -sf /usr/local/bun/bin/bun /usr/local/bin/bun \
+    && apt-get purge -y curl unzip \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
-# Persistent data directory:
-# - routstrd config, sqlite db, logs, pid/socket files (ROUTSTRD_DIR)
-# - cocod wallet data (via HOME)
-ENV HOME=/data
-ENV ROUTSTRD_DIR=/data
-RUN mkdir -p /data && chmod 755 /data
+# Install routstrd daemon + cocod wallet CLI globally. The global install lives
+# under /usr/local/bun, not /root, so supervised processes running as cloudron
+# can execute the binaries on Cloudron's read-only root filesystem.
+RUN bun install --global @routstr/cocod routstrd \
+    && ln -sf /usr/local/bun/bin/routstrd /usr/local/bin/routstrd \
+    && ln -sf /usr/local/bun/bin/cocod /usr/local/bin/cocod \
+    && test -f /usr/local/bun/install/global/node_modules/routstrd/dist/daemon/index.js
 
-# Install routstrd-auth into the image.
-WORKDIR /app
+# Cloudron convention: immutable app code in /app/code, persistent data mounted
+# by the platform at /app/data at runtime.
+RUN mkdir -p /app/code
+WORKDIR /app/code
+
 COPY package.json bun.lockb ./
 RUN bun install --frozen-lockfile --production
 COPY src ./src
 
-# routstrd listens inside the container on 8008.
-# routstrd-auth is the public service exposed by Docker on 8080.
-ENV ROUTSTRD_PORT=8008
-ENV ROUTSTRD_AUTH_PORT=8080
-ENV ROUTSTRD_AUTH_HOST=0.0.0.0
-ENV ROUTSTRD_UPSTREAM=http://localhost:8008
-ENV ROUTSTRD_AUTH_ADMIN_NPUBS=npub1l3m0300w4lph5kjfnvazgpj8wnv2tgpv9xdxft9qwt8ccmyz0v0s58tptp
+# Supervisor manages both long-running processes in the single Cloudron app
+# container: routstrd on localhost:8009 and routstrd-auth on 0.0.0.0:8008.
+COPY cloudron/supervisord.conf /etc/supervisor/supervisord-cloudron.conf
+COPY cloudron/supervisor/routstrd.conf /etc/supervisor/conf.d/routstrd.conf
+COPY cloudron/supervisor/auth.conf /etc/supervisor/conf.d/auth.conf
 
-VOLUME ["/data"]
-EXPOSE 8080
+COPY cloudron/start.sh /app/code/start.sh
+COPY cloudron/run-auth.sh /app/code/run-auth.sh
+RUN chmod +x /app/code/start.sh /app/code/run-auth.sh
 
-# Healthcheck the public auth proxy, not the direct routstrd port.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-  CMD bun -e "const p=process.env.ROUTSTRD_AUTH_PORT||8080;const r=await fetch('http://localhost:'+p+'/health');process.exit(r.ok?0:1)"
+EXPOSE 8008
 
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["/app/code/start.sh"]

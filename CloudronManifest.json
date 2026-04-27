@@ -1,0 +1,20 @@
+{
+  "id": "io.routstr.routstrd-auth",
+  "title": "Routstrd Auth",
+  "author": "Routstr <hello@routstr.io>",
+  "description": "Auth proxy and daemon for the Routstr AI routing network",
+  "tagline": "Self-hosted Routstr node with bearer-token auth",
+  "version": "0.1.0",
+  "upstreamVersion": "0.1.0",
+  "healthCheckPath": "/health",
+  "httpPort": 8008,
+  "memoryLimit": 536870912,
+  "addons": {
+    "localstorage": {
+      "sqlite": {
+        "paths": ["/app/data/routstr.db"]
+      }
+    }
+  },
+  "manifestVersion": 2
+}

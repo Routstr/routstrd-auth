@@ -3,10 +3,11 @@ import { existsSync } from "fs";
 import { nip19 } from "nostr-tools";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "";
+const IS_CLOUDRON = process.env.CLOUDRON === "1";
+const DEFAULT_ROUTSTRD_DIR = IS_CLOUDRON ? "/app/data" : join(HOME, ".routstrd");
 
 /** Directory for routstr config (shared with routstrd). */
-export const ROUTSTRD_DIR =
-  process.env.ROUTSTRD_DIR || join(HOME, ".routstrd");
+export const ROUTSTRD_DIR = process.env.ROUTSTRD_DIR || DEFAULT_ROUTSTRD_DIR;
 
 /** Path to the shared SQLite database. */
 export const DB_PATH =
@@ -21,7 +22,8 @@ export const DEFAULT_PORT = Number(process.env.ROUTSTRD_AUTH_PORT) || 8008;
 
 /** Default upstream (routstrd daemon) — must be local-only. */
 export const DEFAULT_UPSTREAM =
-  process.env.ROUTSTRD_UPSTREAM || "http://localhost:8008";
+  process.env.ROUTSTRD_UPSTREAM ||
+  (IS_CLOUDRON ? "http://localhost:8009" : "http://localhost:8008");
 
 /** Default host for the auth proxy. */
 export const DEFAULT_HOST = process.env.ROUTSTRD_AUTH_HOST || "0.0.0.0";
