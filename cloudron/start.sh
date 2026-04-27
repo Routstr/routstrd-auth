@@ -8,7 +8,7 @@ chown -R cloudron:cloudron /app/data
 # Make Cloudron defaults visible to every child process. Users can still
 # override these through Cloudron environment variables if needed.
 export HOME="/app/data"
-export ROUTSTRD_DIR="${ROUTSTRD_DIR:-/app/data}"
+export ROUTSTRD_DIR="${ROUTSTRD_DIR:-/app/data/routstrd}"
 export ROUTSTRD_AUTH_HOST="${ROUTSTRD_AUTH_HOST:-0.0.0.0}"
 export ROUTSTRD_AUTH_PORT="${ROUTSTRD_AUTH_PORT:-8008}"
 export ROUTSTRD_PORT="${ROUTSTRD_PORT:-8009}"

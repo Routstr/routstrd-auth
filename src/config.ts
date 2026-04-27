@@ -4,7 +4,7 @@ import { nip19 } from "nostr-tools";
 
 const HOME = process.env.HOME || process.env.USERPROFILE || "";
 const IS_CLOUDRON = process.env.CLOUDRON === "1";
-const DEFAULT_ROUTSTRD_DIR = IS_CLOUDRON ? "/app/data" : join(HOME, ".routstrd");
+const DEFAULT_ROUTSTRD_DIR = IS_CLOUDRON ? "/app/data/routstrd" : join(HOME, ".routstrd");
 
 /** Directory for routstr config (shared with routstrd). */
 export const ROUTSTRD_DIR = process.env.ROUTSTRD_DIR || DEFAULT_ROUTSTRD_DIR;
