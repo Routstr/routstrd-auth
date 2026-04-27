@@ -5,13 +5,24 @@ USER root
 
 # Install Bun into a location that remains readable/executable by the
 # non-root cloudron user at runtime.
+#
+# Use Bun's x64-baseline build instead of the installer auto-detected build.
+# Some Cloudron hosts/VMs do not expose AVX/AVX2 CPU instructions; the regular
+# x64 Bun binary can crash there with SIGILL ("Illegal instruction").
+ARG BUN_VERSION=1.2.22
+ARG BUN_TARGET=bun-linux-x64-baseline
 ENV BUN_INSTALL=/usr/local/bun
 ENV PATH="/usr/local/bun/bin:/usr/local/bin:${PATH}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates unzip \
-    && curl -fsSL https://bun.sh/install | bash \
+    && curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${BUN_TARGET}.zip" -o /tmp/bun.zip \
+    && unzip /tmp/bun.zip -d /tmp \
+    && mkdir -p /usr/local/bun/bin \
+    && mv "/tmp/${BUN_TARGET}/bun" /usr/local/bun/bin/bun \
+    && chmod +x /usr/local/bun/bin/bun \
     && ln -sf /usr/local/bun/bin/bun /usr/local/bin/bun \
+    && rm -rf /tmp/bun.zip "/tmp/${BUN_TARGET}" \
     && apt-get purge -y curl unzip \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
