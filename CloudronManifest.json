@@ -12,9 +12,29 @@
   "addons": {
     "localstorage": {
       "sqlite": {
-        "paths": ["/app/data/routstr.db"]
+        "paths": [
+          "/app/data/routstr.db"
+        ]
       }
     }
   },
-  "manifestVersion": 2
+  "manifestVersion": 2,
+  "website": "https://routstr.com",
+  "contactEmail": "team@routstr.com",
+  "iconUrl": "https://routstr.com/favicon.ico",
+  "packagerName": "Routstr",
+  "packagerUrl": "https://github.com/Routstr",
+  "minBoxVersion": "9.1.0",
+  "changelog": "file://CHANGELOG",
+  "postInstallMessage": "file://POSTINSTALL.md",
+  "tags": [
+    "ai",
+    "proxy",
+    "nostr",
+    "bitcoin",
+    "openai"
+  ],
+  "mediaLinks": [
+    "https://www.routstr.com/"
+  ]
 }
