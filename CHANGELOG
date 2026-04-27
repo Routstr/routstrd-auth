@@ -1,3 +1,7 @@
+[0.1.2]
+* Fixed routstrd dir env variables
+* Added npub bootstrapping to auth
+
 [0.1.1]
 * Bump version
 
