@@ -1,3 +1,6 @@
+[0.1.3]
+* Cocod bug fix
+
 [0.1.2]
 * Fixed routstrd dir env variables
 * Added npub bootstrapping to auth
