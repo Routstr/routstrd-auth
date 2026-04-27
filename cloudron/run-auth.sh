@@ -4,7 +4,7 @@ set -eu
 : "${ROUTSTRD_AUTH_PORT:=8008}"
 : "${ROUTSTRD_AUTH_HOST:=0.0.0.0}"
 : "${ROUTSTRD_UPSTREAM:=http://localhost:8009}"
-: "${ROUTSTRD_DB_PATH:=/app/data/routstr.db}"
+: "${ROUTSTRD_DB_PATH:=/app/data/routstrd/routstr.db}"
 
 export ROUTSTRD_AUTH_PORT ROUTSTRD_AUTH_HOST ROUTSTRD_UPSTREAM ROUTSTRD_DB_PATH
 

@@ -13,6 +13,7 @@ ARG BUN_VERSION=1.2.22
 ARG BUN_TARGET=bun-linux-x64-baseline
 ENV BUN_INSTALL=/usr/local/bun
 ENV ROUTSTRD_DIR=/app/data/routstrd
+ENV COCOD_DIR=/app/data/cocod
 ENV PATH="/usr/local/bun/bin:/usr/local/bin:${PATH}"
 
 RUN apt-get update \

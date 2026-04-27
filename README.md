@@ -27,6 +27,7 @@ All values have sensible defaults and can be overridden via environment variable
 | `ROUTSTRD_UPSTREAM` | `http://localhost:8009` | Upstream routstrd URL |
 | `ROUTSTRD_DB_PATH` | `~/.routstrd/routstr.db` | Shared SQLite DB |
 | `ROUTSTRD_DIR` | `~/.routstrd` | Base config directory |
+| `COCOD_DIR` | `~/.cocod` | Wallet data directory |
 
 ## Usage
 

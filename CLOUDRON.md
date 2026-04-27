@@ -185,6 +185,7 @@ chown -R cloudron:cloudron /app/data
 if [[ ! -f /app/data/.initialized ]]; then
     echo "==> First run detected. Setting up data directory..."
     # routstrd expects ROUTSTRD_DIR; we point it at /app/data/routstrd
+    # cocod expects COCOD_DIR; we point it at /app/data/cocod
     # Any bootstrap DB copy or config generation goes here
     touch /app/data/.initialized
     echo "==> Initialization complete."
@@ -207,7 +208,7 @@ exec /usr/bin/supervisord --configuration /etc/supervisor/supervisord.conf --nod
 [program:routstrd]
 priority=10
 directory=/app/data
-environment=HOME=/app/data,ROUTSTRD_DIR=/app/data/routstrd
+environment=HOME=/app/data,ROUTSTRD_DIR=/app/data/routstrd,COCOD_DIR=/app/data/cocod
 command=/usr/local/bin/routstrd --port 8009 --db-path /app/data/routstr.db
 user=cloudron
 autostart=true
@@ -224,7 +225,7 @@ stderr_logfile_maxbytes=0
 [program:auth]
 priority=20
 directory=/app/code
-environment=HOME=/app/data,ROUTSTRD_DIR=/app/data/routstrd,ROUTSTRD_UPSTREAM=http://localhost:8009,ROUTSTRD_DB_PATH=/app/data/routstr.db,ROUTSTRD_AUTH_PORT=8008,ROUTSTRD_AUTH_HOST=0.0.0.0
+environment=HOME=/app/data,ROUTSTRD_DIR=/app/data/routstrd,COCOD_DIR=/app/data/cocod,ROUTSTRD_UPSTREAM=http://localhost:8009,ROUTSTRD_DB_PATH=/app/data/routstrd/routstr.db,ROUTSTRD_AUTH_PORT=8008,ROUTSTRD_AUTH_HOST=0.0.0.0
 command=/usr/local/bin/bun run /app/code/src/index.ts start
 user=cloudron
 autostart=true
@@ -252,6 +253,7 @@ Cloudron injects several useful environment variables at runtime. The ones most 
 
 **Recommended code change:** In `src/config.ts` (or wherever env vars are loaded), detect `CLOUDRON=1` and default:
 - `ROUTSTRD_DIR` → `/app/data/routstrd`
+- `COCOD_DIR` → `/app/data/cocod`
 - `ROUTSTRD_DB_PATH` → `/app/data/routstrd/routstr.db`
 - `ROUTSTRD_UPSTREAM` → `http://localhost:8009`
 - `ROUTSTRD_AUTH_PORT` → `8008`
@@ -270,7 +272,7 @@ This makes the Cloudron package work out of the box without requiring the user t
 | Auth proxy code | `/app/code` | Read-only, updated on app update. |
 | SQLite DB | `/app/data/routstr.db` | Persistent, WAL-aware backup via `localstorage.sqlite` addon. |
 | routstrd config / logs / pid | `/app/data` | `ROUTSTRD_DIR=/app/data/routstrd` ensures everything lands here. |
-| Wallet data (`cocod`) | `/app/data` | `HOME=/app/data` puts Bun/npm global tool data here. |
+| Wallet data (`cocod`) | `/app/data/cocod` | `COCOD_DIR=/app/data/cocod` ensures wallet data lands here. |
 | Temp files | `/tmp` | Ephemeral; cleaned periodically by Cloudron. |
 | Runtime state | `/run` | Ephemeral; survives restarts but not updates/rebuilds. |
 

@@ -2,7 +2,8 @@
 set -e
 
 # Ensure data directories exist for routstrd and cocod
-mkdir -p /data/.cocod
+export COCOD_DIR="${COCOD_DIR:-/data/cocod}"
+mkdir -p "$COCOD_DIR"
 mkdir -p /data/logs
 
 # Attempt to initialize cocod.
