@@ -17,17 +17,21 @@ export class AuthProxy {
 
   /**
    * Forward a request to the upstream routstrd daemon.
+   * @param stripAuth - If true (default), removes the Authorization header before forwarding.
+   *                    Pass false to keep the auth header (used for Bearer/sauth tokens).
    */
   private async forward(
     req: Request,
     body?: Uint8Array,
+    stripAuth = true,
   ): Promise<Response> {
     const url = new URL(req.url);
     const upstreamUrl = `${this.config.upstream}${url.pathname}${url.search}`;
 
     const headers = new Headers(req.headers);
-    // Strip auth header before forwarding — the daemon doesn't need it.
-    headers.delete("authorization");
+    if (stripAuth) {
+      headers.delete("authorization");
+    }
     headers.delete("host");
 
     const requestBody =
@@ -234,7 +238,8 @@ export class AuthProxy {
         return this.json({ error: "Invalid API key." }, 401);
       }
 
-      return this.forward(req);
+      // Keep auth header for Bearer tokens so upstream can validate.
+      return this.forward(req, undefined, false);
     }
 
     const nip98Match = authorization.match(/^Nostr\s+(.+)$/i);
