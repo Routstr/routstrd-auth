@@ -17,11 +17,9 @@ export class AuthProxy {
 
   /**
    * Forward a request to the upstream routstrd daemon.
-   * Optionally injects client identity headers.
    */
   private async forward(
     req: Request,
-    identity?: { clientId?: string; nostrPubkey?: string },
     body?: Uint8Array,
   ): Promise<Response> {
     const url = new URL(req.url);
@@ -31,16 +29,6 @@ export class AuthProxy {
     // Strip auth header before forwarding — the daemon doesn't need it.
     headers.delete("authorization");
     headers.delete("host");
-    // Inject client identity if available.
-    if (identity?.clientId) {
-      headers.set("x-routstr-client-id", identity.clientId);
-    }
-    if (identity?.nostrPubkey) {
-      headers.set("x-routstr-nostr-pubkey", identity.nostrPubkey);
-      // Also set x-routstr-client-id so existing upstream code that keys off a
-      // single client-id header can identify NIP-98 users without changes.
-      headers.set("x-routstr-client-id", `nostr:${identity.nostrPubkey}`);
-    }
 
     const requestBody =
       req.method === "GET" || req.method === "HEAD"
@@ -246,7 +234,7 @@ export class AuthProxy {
         return this.json({ error: "Invalid API key." }, 401);
       }
 
-      return this.forward(req, { clientId: client.clientId });
+      return this.forward(req);
     }
 
     const nip98Match = authorization.match(/^Nostr\s+(.+)$/i);
@@ -269,7 +257,7 @@ export class AuthProxy {
           }, 403);
         }
 
-        return this.forward(req, { nostrPubkey: pubkey }, body);
+        return this.forward(req, body);
       } catch (err) {
         return this.json({
           error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
