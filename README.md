@@ -29,6 +29,55 @@ All values have sensible defaults and can be overridden via environment variable
 | `ROUTSTRD_DIR` | `~/.routstrd` | Base config directory |
 | `COCOD_DIR` | `~/.cocod` | Wallet data directory |
 
+## Cloudron
+
+[Cloudron](https://www.cloudron.io/) runs the routstrd server. Team members connect to it as clients using the `routstrd` CLI.
+
+### Initial Setup (first person)
+
+```bash
+# Install the CLI client globally
+bun i -g routstrd
+
+# Connect to your Cloudron instance
+routstrd remote <cloudron-url>
+
+# Register yourself as the first admin (first npub gets admin by default)
+routstrd npubs register
+```
+
+That's it — you now have full access to routstrd on Cloudron. Integrate it with your coding agents:
+
+```bash
+routstrd clients add --pi-agent    # for Pi Agent
+routstrd clients add --claude-code # for Claude Code
+# ...and more
+```
+
+### Adding Team Members
+
+Anyone joining an existing routstrd Cloudron instance does the same initial steps:
+
+1. `bun i -g routstrd` — install the CLI
+2. `routstrd remote <cloudron-url>` — connect to the instance (this generates a unique npub for the new person)
+3. Give that npub to someone who already has access
+4. That person runs: `routstrd npubs add <npub>` — grants access
+5. The new member can now add clients (e.g. `routstrd clients add --claude-code`) and start using routstrd
+
+### Tracking Usage
+
+Every team member gets their own npub, and every client they register gets a unique ID — making it easy to track team usage from the Cloudron terminal.
+
+```bash
+# Individual: see your own usage
+routstrd top
+
+# Anyone with access to the Cloudron terminal: see everything
+# The clients tab shows individual usage, with the last 7 chars of each npub
+# appended to client IDs for easy identification
+routstrd top
+```
+
 ## Usage
 
 ### Vanilla Docker
