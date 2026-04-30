@@ -1,3 +1,6 @@
+[0.1.14]
+* Reduced node cooldown period from 5 minutes to 42 seconds
+
 [0.1.13]
 * Fixing cloudron cache issue
 
