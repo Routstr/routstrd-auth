@@ -1,3 +1,6 @@
+[0.1.6]
+* asdf
+
 [0.1.5]
 * Remove client identity header injection on upstream forwarding
 * Conditional auth header stripping: Bearer/sauth passed through, NIP-98 stripped
