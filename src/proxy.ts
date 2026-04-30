@@ -117,7 +117,7 @@ export class AuthProxy {
       if (!this.isAdminPubkey(pubkey)) {
         return this.json({
           error: this.store.countAdminNpubs() === 0
-            ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with POST /npubs."
+            ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with 'routstrd npubs register'."
             : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
         }, 403);
       }
@@ -254,10 +254,10 @@ export class AuthProxy {
       try {
         const { pubkey } = await validateNIP98Request(authorization, req, body);
 
-        if (AuthProxy.isAdminPath(path) && !this.isAdminPubkey(pubkey)) {
+        if (!this.isAdminPubkey(pubkey)) {
           return this.json({
             error: this.store.countAdminNpubs() === 0
-              ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with POST /npubs."
+              ? "This endpoint requires an admin npub/pubkey, but none is configured. Add the first admin with 'routstrd npubs register'."
               : "This endpoint requires NIP-98 auth from a configured admin npub/pubkey.",
           }, 403);
         }
