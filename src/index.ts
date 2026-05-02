@@ -54,13 +54,13 @@ program
     }
 
     // Try opening the DB to verify schema exists.
-    const { AuthStore } = require("./store");
-    const store = new AuthStore(cfg.dbPath, cfg.adminPubkeys);
-    const hasAny = store.hasAnyClients();
-    const adminCount = store.countAdminNpubs();
-    store.close();
+    const proxy = new AuthProxy(cfg);
+    const npubCount = proxy["store"].countNpubs();
+    const adminCount = proxy["store"].countNpubs("admin");
+    const userCount = proxy["store"].countNpubs("user");
+    proxy.close();
 
-    console.log(`\n✅ DB accessible. ${hasAny ? "Clients exist." : "No clients yet."} ${adminCount} admin npub(s) configured.`);
+    console.log(`\n✅ DB accessible. ${npubCount} npub(s) registered (${adminCount} admin, ${userCount} user).`);
   });
 
 program.parse();
