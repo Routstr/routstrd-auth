@@ -101,12 +101,18 @@ export class AuthProxy {
       return this.json({ error: "Invalid npub/pubkey. Use npub or 64-char hex pubkey." }, 400);
     }
 
-    const roleRaw = (parsed as { role?: unknown })?.role;
-    if (roleRaw !== undefined && typeof roleRaw === "string" && (roleRaw === "admin" || roleRaw === "user")) {
+    const roleRaw = parsed && typeof parsed === "object"
+      ? (parsed as { role?: unknown }).role
+      : undefined;
+    if (roleRaw === undefined) {
+      return { pubkey };
+    }
+
+    if (roleRaw === "admin" || roleRaw === "user") {
       return { pubkey, role: roleRaw };
     }
 
-    return { pubkey };
+    return this.json({ error: "Invalid role. Expected 'admin' or 'user'." }, 400);
   }
 
   private async authenticateNpub(
@@ -177,7 +183,7 @@ export class AuthProxy {
       let createdBy: string | null = null;
 
       if (anyNpubs) {
-        const auth = this.authenticateNpub(
+        const auth = await this.authenticateNpub(
           req,
           req.headers.get("authorization"),
           body,
@@ -190,7 +196,9 @@ export class AuthProxy {
       const parsed = this.parseNpubBody(body);
       if (parsed instanceof Response) return parsed;
 
-      const { role = "user" } = parsed;
+      // Bootstrap the very first registered npub as admin by default. After
+      // bootstrap, default to user unless an admin explicitly sets role=admin.
+      const role = parsed.role ?? (anyNpubs ? "user" : "admin");
       const entry = this.store.addNpub(parsed.pubkey, role, createdBy);
       return this.json({
         npub: entry.npub,
@@ -204,7 +212,7 @@ export class AuthProxy {
       const body = req.method === "GET" || req.method === "HEAD"
         ? undefined
         : new Uint8Array(await req.arrayBuffer());
-      const auth = this.authenticateNpub(
+      const auth = await this.authenticateNpub(
         req,
         req.headers.get("authorization"),
         body,
@@ -294,13 +302,13 @@ export class AuthProxy {
 
       // Determine required role first to generate the right error message
       if (AuthProxy.isAdminPath(path)) {
-        const auth = this.authenticateNpub(req, authorization, body, "admin");
+        const auth = await this.authenticateNpub(req, authorization, body, "admin");
         if (auth instanceof Response) return auth;
         return this.forward(req, body);
       }
 
       if (AuthProxy.isNpubRestrictedPath(path)) {
-        const auth = this.authenticateNpub(req, authorization, body, "user");
+        const auth = await this.authenticateNpub(req, authorization, body, "user");
         if (auth instanceof Response) return auth;
         return this.forward(req, body);
       }
@@ -376,13 +384,20 @@ export class AuthProxy {
 
   /** Endpoints that require an admin NIP-98 identity. */
   static ADMIN_PATHS = new Set([
-    "/clients/add",
+    "/wallet/send/cashu",
+    "/wallet/send/bolt11",
   ]);
 
   /** Endpoints restricted to registered npubs (admin + user). API keys cannot access. */
   static NPUB_RESTRICTED_PATHS = new Set([
-    "/wallet/send/cashu",
-    "/wallet/send/bolt11",
+    "/clients/add",
+    "/wallet/status",
+    "/wallet/unlock",
+    "/wallet/balance",
+    "/wallet/receive/cashu",
+    "/wallet/receive/bolt11",
+    "/wallet/mints",
+    "/wallet/mints/info",
   ]);
 
   static isPublicPath(path: string): boolean {

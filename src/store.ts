@@ -41,30 +41,32 @@ export class AuthStore {
    * a new `role` column (legacy admins become 'admin' role).
    */
   private migrateNpubTable(): void {
-    // Create the new table
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS routstr_auth_npubs (
-        pubkey TEXT PRIMARY KEY,
-        npub TEXT NOT NULL UNIQUE,
-        created_at INTEGER NOT NULL,
-        created_by TEXT,
-        source TEXT NOT NULL DEFAULT 'api',
-        role TEXT NOT NULL DEFAULT 'admin'
-      )
-    `);
-
-    // Check if the legacy table exists and migrate its data
-    const legacyExists = this.db
-      .query("SELECT name FROM sqlite_master WHERE type='table' AND name='routstr_auth_admins'")
-      .get();
-
-    if (legacyExists) {
+    this.db.transaction(() => {
+      // Create the new table.
       this.db.run(`
-        INSERT OR IGNORE INTO routstr_auth_npubs (pubkey, npub, created_at, created_by, source, role)
-        SELECT pubkey, npub, created_at, created_by, source, 'admin' FROM routstr_auth_admins
+        CREATE TABLE IF NOT EXISTS routstr_auth_npubs (
+          pubkey TEXT PRIMARY KEY,
+          npub TEXT NOT NULL UNIQUE,
+          created_at INTEGER NOT NULL,
+          created_by TEXT,
+          source TEXT NOT NULL DEFAULT 'api',
+          role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'user'))
+        )
       `);
-      this.db.run(`DROP TABLE routstr_auth_admins`);
-    }
+
+      // Check if the legacy table exists and migrate its data.
+      const legacyExists = this.db
+        .query("SELECT name FROM sqlite_master WHERE type='table' AND name='routstr_auth_admins'")
+        .get();
+
+      if (legacyExists) {
+        this.db.run(`
+          INSERT OR IGNORE INTO routstr_auth_npubs (pubkey, npub, created_at, created_by, source, role)
+          SELECT pubkey, npub, created_at, created_by, source, 'admin' FROM routstr_auth_admins
+        `);
+        this.db.run(`DROP TABLE routstr_auth_admins`);
+      }
+    })();
   }
 
   private bootstrapAdminPubkeys(pubkeys: string[]): void {
