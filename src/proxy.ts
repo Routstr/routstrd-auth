@@ -335,6 +335,43 @@ export class AuthProxy {
     return this.json({ error: "Not found." }, 404);
   }
 
+  private parseLimit(value: string | null, fallback = 10): number {
+    const requested = Number.parseInt(value || String(fallback), 10);
+    return Number.isFinite(requested) && requested > 0
+      ? Math.min(requested, 100000)
+      : fallback;
+  }
+
+  private async handleUsage(req: Request, path: string): Promise<Response> {
+    if (req.method !== "GET" || path !== "/usage") {
+      return this.json({ error: "Not found." }, 404);
+    }
+
+    const auth = await this.authenticateNpub(
+      req,
+      req.headers.get("authorization"),
+      undefined,
+      "user",
+    );
+    if (auth instanceof Response) return auth;
+
+    const url = new URL(req.url);
+    const limit = this.parseLimit(url.searchParams.get("limit"));
+    const suffix = this.getNpubSuffix(auth.npub);
+    const clients = this.store
+      .getClients()
+      .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
+    const storedClientIds = clients.map((c) => c.clientId);
+    const entries = this.store
+      .getUsageByClientIds(storedClientIds, limit)
+      .map((entry) => ({
+        ...entry,
+        client: entry.client ? this.removeSuffixFromId(entry.client, suffix) : entry.client,
+      }));
+
+    return this.json({ output: entries });
+  }
+
   /** Handle /npubs management endpoints. */
   private async handleNpubs(req: Request, path: string): Promise<Response> {
     if (req.method === "GET" && path === "/npubs") {
@@ -425,6 +462,10 @@ export class AuthProxy {
 
     if (path === "/clients" || path === "/clients/add" || path === "/clients/delete") {
       return this.handleClients(req, path);
+    }
+
+    if (path === "/usage") {
+      return this.handleUsage(req, path);
     }
 
     const isPublicPath = AuthProxy.isPublicPath(path);

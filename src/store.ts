@@ -10,6 +10,22 @@ export interface Client {
   ownerNpub?: string;
 }
 
+export interface UsageEntry {
+  id: string;
+  timestamp: number;
+  modelId: string;
+  baseUrl: string;
+  requestId: string;
+  cost: number;
+  satsCost: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  client?: string;
+  sessionId?: string;
+  tags?: string[];
+}
+
 export type NpubRole = "admin" | "user";
 
 export interface NpubEntry {
@@ -93,6 +109,72 @@ export class AuthStore {
     if (!row?.value) return [];
     try {
       return JSON.parse(row.value) as Client[];
+    } catch {
+      return [];
+    }
+  }
+
+  private hasTable(tableName: string): boolean {
+    const row = this.db
+      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+      .get(tableName) as { name: string } | null;
+    return Boolean(row);
+  }
+
+  private mapUsageRow(row: Record<string, unknown>): UsageEntry {
+    let tags: string[] | undefined;
+    if (typeof row.tags === "string") {
+      try {
+        const parsedTags = JSON.parse(row.tags);
+        tags = Array.isArray(parsedTags) ? parsedTags.filter((t) => typeof t === "string") : undefined;
+      } catch {
+        tags = undefined;
+      }
+    }
+
+    return {
+      id: String(row.id),
+      timestamp: Number(row.timestamp),
+      modelId: String(row.model_id),
+      baseUrl: String(row.base_url),
+      requestId: String(row.request_id),
+      cost: Number(row.cost),
+      satsCost: Number(row.sats_cost),
+      promptTokens: Number(row.prompt_tokens),
+      completionTokens: Number(row.completion_tokens),
+      totalTokens: Number(row.total_tokens),
+      client: typeof row.client === "string" ? row.client : undefined,
+      sessionId: typeof row.session_id === "string" ? row.session_id : undefined,
+      tags,
+    };
+  }
+
+  /** Read usage entries for the provided stored client ids directly from SQLite. */
+  getUsageByClientIds(clientIds: string[], limit: number): UsageEntry[] {
+    const uniqueClientIds = [...new Set(clientIds)].filter(Boolean);
+    if (uniqueClientIds.length === 0) return [];
+
+    if (this.hasTable("usage_tracking")) {
+      const placeholders = uniqueClientIds.map(() => "?").join(", ");
+      const rows = this.db
+        .query(`SELECT * FROM usage_tracking WHERE client IN (${placeholders}) ORDER BY timestamp DESC LIMIT ?`)
+        .all(...uniqueClientIds, limit) as Array<Record<string, unknown>>;
+      return rows.map((row) => this.mapUsageRow(row));
+    }
+
+    // Legacy fallback for old SDK storage before usage_tracking had its own table.
+    const row = this.db
+      .query("SELECT value FROM sdk_storage WHERE key = 'usage_tracking'")
+      .get() as { value: string } | null;
+    if (!row?.value) return [];
+
+    try {
+      const clientIdSet = new Set(uniqueClientIds);
+      const entries = JSON.parse(row.value) as UsageEntry[];
+      return entries
+        .filter((entry) => entry.client && clientIdSet.has(entry.client))
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, limit);
     } catch {
       return [];
     }
