@@ -7,6 +7,7 @@ export interface Client {
   apiKey: string;
   createdAt: number;
   lastUsed: number | null;
+  ownerNpub?: string;
 }
 
 export type NpubRole = "admin" | "user";
@@ -85,7 +86,7 @@ export class AuthStore {
   }
 
   /** Read all clients from the sdk_storage JSON blob. */
-  private getClients(): Client[] {
+  getClients(): Client[] {
     const row = this.db
       .query("SELECT value FROM sdk_storage WHERE key = 'client_ids'")
       .get() as { value: string } | null;

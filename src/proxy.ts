@@ -1,6 +1,6 @@
 import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
 import { validateNIP98Request } from "./nip98";
-import { type NpubRole, AuthStore } from "./store";
+import { type Client, type NpubRole, AuthStore } from "./store";
 
 /**
  * Thin proxy that validates Bearer tokens or NIP-98 Nostr HTTP auth events and
@@ -33,6 +33,7 @@ export class AuthProxy {
       headers.delete("authorization");
     }
     headers.delete("host");
+    headers.delete("content-length");
 
     const requestBody =
       req.method === "GET" || req.method === "HEAD"
@@ -120,7 +121,7 @@ export class AuthProxy {
     authorization: string | null,
     body: Uint8Array | undefined,
     requiredRole: NpubRole,
-  ): Promise<{ pubkey: string; role: NpubRole } | Response> {
+  ): Promise<{ pubkey: string; npub: string; role: NpubRole } | Response> {
     if (!authorization) {
       return this.json({
         error:
@@ -160,12 +161,178 @@ export class AuthProxy {
         }, 403);
       }
 
-      return { pubkey, role: entry.role };
+      return { pubkey, npub: entry.npub, role: entry.role };
     } catch (err) {
       return this.json({
         error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
       }, 401);
     }
+  }
+
+  private getNpubSuffix(npub: string): string {
+    return npub.slice(-7);
+  }
+
+  private addSuffixToId(id: string, suffix: string): string {
+    return id.endsWith(`-${suffix}`) ? id : `${id}-${suffix}`;
+  }
+
+  private removeSuffixFromId(id: string, suffix: string): string {
+    const suffixStr = `-${suffix}`;
+    return id.endsWith(suffixStr) ? id.slice(0, -suffixStr.length) : id;
+  }
+
+  private sanitizeClientId(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "");
+  }
+
+  private clientBelongsToNpub(client: Client, npub: string, suffix: string): boolean {
+    // Prefer the explicit owner when present. The suffix fallback keeps older
+    // clients usable until they are re-created/migrated with ownerNpub.
+    return client.ownerNpub ? client.ownerNpub === npub : client.clientId.endsWith(`-${suffix}`);
+  }
+
+  private stripClientOwnerSuffix(client: Client, suffix: string, ownerNpub: string) {
+    return {
+      id: this.removeSuffixFromId(client.clientId, suffix),
+      name: client.name,
+      apiKey: client.apiKey,
+      createdAt: client.createdAt,
+      lastUsed: client.lastUsed,
+      ownerNpub: client.ownerNpub ?? ownerNpub,
+    };
+  }
+
+  private async handleClients(req: Request, path: string): Promise<Response> {
+    const body = req.method === "GET" || req.method === "HEAD"
+      ? undefined
+      : new Uint8Array(await req.arrayBuffer());
+    const auth = await this.authenticateNpub(
+      req,
+      req.headers.get("authorization"),
+      body,
+      "user",
+    );
+    if (auth instanceof Response) return auth;
+
+    const suffix = this.getNpubSuffix(auth.npub);
+
+    if (req.method === "GET" && path === "/clients") {
+      const clients = this.store.getClients()
+        .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix))
+        .map((c) => this.stripClientOwnerSuffix(c, suffix, auth.npub));
+
+      return this.json({
+        output: {
+          clients,
+          totalCount: clients.length,
+        },
+      });
+    }
+
+    if (req.method === "POST" && path === "/clients/add") {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = body && body.byteLength > 0
+          ? JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
+          : {};
+      } catch {
+        return this.json({ error: "Invalid JSON body." }, 400);
+      }
+
+      const name = parsed.name;
+      const explicitId = parsed.id;
+      if (!name || typeof name !== "string" || name.trim() === "") {
+        return this.json({ error: "Missing required 'name' field (must be a non-empty string)." }, 400);
+      }
+      if (!explicitId || typeof explicitId !== "string" || explicitId.trim() === "") {
+        return this.json({ error: "Missing required 'id' field (must be a non-empty string)." }, 400);
+      }
+
+      const unsuffixedId = this.removeSuffixFromId(this.sanitizeClientId(explicitId), suffix);
+      if (!unsuffixedId) {
+        return this.json({ error: "Invalid client id. Must contain alphanumeric characters." }, 400);
+      }
+
+      const upstreamBody = new TextEncoder().encode(JSON.stringify({
+        ...parsed,
+        id: this.addSuffixToId(unsuffixedId, suffix),
+        ownerNpub: auth.npub,
+      }));
+
+      const upstreamReq = new Request(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: upstreamBody,
+      });
+      const response = await this.forward(upstreamReq, upstreamBody);
+
+      if (!response.ok) return response;
+      const payload = await response.json() as {
+        output?: { client?: { id?: string; ownerNpub?: string } };
+        error?: string;
+      };
+      if (payload.output?.client?.id) {
+        payload.output.client.id = this.removeSuffixFromId(payload.output.client.id, suffix);
+      }
+      if (payload.output?.client && !payload.output.client.ownerNpub) {
+        payload.output.client.ownerNpub = auth.npub;
+      }
+      return this.json(payload, response.status);
+    }
+
+    if (req.method === "POST" && path === "/clients/delete") {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = body && body.byteLength > 0
+          ? JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
+          : {};
+      } catch {
+        return this.json({ error: "Invalid JSON body." }, 400);
+      }
+
+      const id = parsed.id;
+      if (!id || typeof id !== "string" || id.trim() === "") {
+        return this.json({ error: "Missing required 'id' field (must be a non-empty string)." }, 400);
+      }
+
+      const unsuffixedId = this.removeSuffixFromId(this.sanitizeClientId(id), suffix);
+      if (!unsuffixedId) {
+        return this.json({ error: "Invalid client id. Must contain alphanumeric characters." }, 400);
+      }
+
+      const resolvedId = this.addSuffixToId(unsuffixedId, suffix);
+      const client = this.store.getClients().find((c) => c.clientId === resolvedId);
+      if (!client || !this.clientBelongsToNpub(client, auth.npub, suffix)) {
+        return this.json({ error: `Client with id '${unsuffixedId}' not found.` }, 404);
+      }
+
+      const upstreamBody = new TextEncoder().encode(JSON.stringify({
+        ...parsed,
+        id: resolvedId,
+      }));
+      const upstreamReq = new Request(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: upstreamBody,
+      });
+      const response = await this.forward(upstreamReq, upstreamBody);
+
+      if (!response.ok) return response;
+      const payload = await response.json() as {
+        output?: { message?: string; id?: string };
+        error?: string;
+      };
+      if (payload.output?.id) {
+        payload.output.id = this.removeSuffixFromId(payload.output.id, suffix);
+      }
+      return this.json(payload, response.status);
+    }
+
+    return this.json({ error: "Not found." }, 404);
   }
 
   /** Handle /npubs management endpoints. */
@@ -254,6 +421,10 @@ export class AuthProxy {
 
     if (path === "/npubs" || path.startsWith("/npubs/")) {
       return this.handleNpubs(req, path);
+    }
+
+    if (path === "/clients" || path === "/clients/add" || path === "/clients/delete") {
+      return this.handleClients(req, path);
     }
 
     const isPublicPath = AuthProxy.isPublicPath(path);
@@ -390,7 +561,6 @@ export class AuthProxy {
 
   /** Endpoints restricted to registered npubs (admin + user). API keys cannot access. */
   static NPUB_RESTRICTED_PATHS = new Set([
-    "/clients/add",
     "/wallet/status",
     "/wallet/unlock",
     "/wallet/balance",
