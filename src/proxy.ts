@@ -447,6 +447,35 @@ export class AuthProxy {
       return this.json({ removed });
     }
 
+    if (req.method === "PATCH" && path === "/npubs") {
+      const body = new Uint8Array(await req.arrayBuffer());
+      const auth = await this.authenticateNpub(
+        req,
+        req.headers.get("authorization"),
+        body,
+        "admin",
+      );
+      if (auth instanceof Response) return auth;
+
+      const parsed = this.parseNpubBody(body);
+      if (parsed instanceof Response) return parsed;
+
+      if (!parsed.role) {
+        return this.json({ error: "Missing required 'role' field. Expected 'admin' or 'user'." }, 400);
+      }
+
+      const updated = this.store.updateNpubRole(parsed.pubkey, parsed.role);
+      if (!updated) {
+        return this.json({ error: "npub/pubkey not found." }, 404);
+      }
+
+      return this.json({
+        npub: updated.npub,
+        pubkey: updated.pubkey,
+        role: updated.role,
+      });
+    }
+
     return this.json({ error: "Not found." }, 404);
   }
 

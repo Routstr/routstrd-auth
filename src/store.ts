@@ -311,6 +311,18 @@ export class AuthStore {
     return this.addNpub(pubkey, "admin", createdBy);
   }
 
+  updateNpubRole(pubkey: string, role: NpubRole): NpubEntry | null {
+    const normalizedPubkey = pubkey.toLowerCase();
+    const existing = this.getNpubByPubkey(normalizedPubkey);
+    if (!existing) return null;
+
+    this.db
+      .prepare("UPDATE routstr_auth_npubs SET role = ? WHERE pubkey = ?")
+      .run(role, normalizedPubkey);
+
+    return this.getNpubByPubkey(normalizedPubkey)!;
+  }
+
   removeNpub(pubkey: string): boolean {
     const result = this.db
       .prepare("DELETE FROM routstr_auth_npubs WHERE pubkey = ?")
