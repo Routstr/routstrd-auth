@@ -1,3 +1,6 @@
+[0.1.17]
+* Added support for updating the role of an npub
+
 [0.1.16]
 * Remove stale cocod PID/socket files from older container runs when running under vanilla Docker
 
