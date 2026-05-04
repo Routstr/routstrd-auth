@@ -16,6 +16,21 @@ export ROUTSTRD_PORT="${ROUTSTRD_PORT:-8009}"
 export ROUTSTRD_UPSTREAM="${ROUTSTRD_UPSTREAM:-http://localhost:${ROUTSTRD_PORT}}"
 export ROUTSTRD_DB_PATH="${ROUTSTRD_DB_PATH:-/app/data/routstrd/routstr.db}"
 
+# Runtime IPC files live under /app/data/cocod, which is persistent on
+# Cloudron/bind-mounted installs. After a container restart they can point at a
+# dead socket or a recycled PID, causing cocod to incorrectly report
+# "already_running" while routstrd cannot connect to it.
+echo "==> Cleaning stale cocod runtime files..."
+rm -f "${COCOD_DIR}/cocod.sock" "${COCOD_DIR}/cocod.sock.startup.lock"
+
+if [[ -f "${COCOD_DIR}/cocod.pid" ]]; then
+    cocod_pid="$(cat "${COCOD_DIR}/cocod.pid" 2>/dev/null || true)"
+    if [[ ! "${cocod_pid}" =~ ^[0-9]+$ ]] || ! ps -p "${cocod_pid}" -o args= 2>/dev/null | grep -q '[c]ocod'; then
+        echo "==> Removing stale cocod pid file (${COCOD_DIR}/cocod.pid)"
+        rm -f "${COCOD_DIR}/cocod.pid"
+    fi
+fi
+
 if [[ ! -f /app/data/.initialized ]]; then
     echo "==> First run detected. Initializing wallet/data files..."
     # cocod init is idempotent-ish but may exit non-zero when already initialized.
