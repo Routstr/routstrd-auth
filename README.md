@@ -87,69 +87,59 @@ This project is intended to be run with plain Docker. Docker Compose is not requ
 Build the image:
 
 ```bash
-docker build -t routstrd .
+docker build -t routstrd-pro-image .
 ```
 
-Create a persistent data volume:
-
-```bash
-docker volume create routstrd-data
-```
-
-Run the container:
+Run the container with a persistent bind mount:
 
 ```bash
 docker run -d \
-  --name routstrd \
+  --name routstrd-pro \
   --restart unless-stopped \
-  -p 8009:8008 \
-  -v routstrd-data:/data \
-  routstrd
+  -p 18008:8008 \
+  -v $HOME/routstrd-data:/app/data \
+  routstrd-pro-image
 ```
+
+> **Important:** The bind mount `$HOME/routstrd-data:/app/data` is crucial for persisting data across container restarts and updates. Without this volume mount, all data will be lost when the container is removed.
 
 The service is now available on the host at:
 
 ```bash
-http://localhost:8009
+http://localhost:18008
 ```
 
 Check the health endpoint:
 
 ```bash
-curl http://localhost:8009/health
+curl http://localhost:18008/health
 ```
 
 Follow logs:
 
 ```bash
-docker logs -f routstrd
+docker logs -f routstrd-pro
 ```
 
 Stop and remove the container:
 
 ```bash
-docker stop routstrd
-docker rm routstrd
+docker stop routstrd-pro
+docker rm routstrd-pro
 ```
 
 Rebuild and restart after changes:
 
 ```bash
-docker stop routstrd
-docker rm routstrd
-docker build -t routstrd .
+docker stop routstrd-pro
+docker rm routstrd-pro
+docker build -t routstrd-pro-image .
 docker run -d \
-  --name routstrd \
+  --name routstrd-pro \
   --restart unless-stopped \
-  -p 8009:8008 \
-  -v routstrd-data:/data \
-  routstrd
-```
-
-If you want the host to use port `8008` instead of `8009`, change the port mapping to:
-
-```bash
--p 8008:8008
+  -p 18008:8008 \
+  -v $HOME/routstrd-data:/app/data \
+  routstrd-pro-image
 ```
 
 > Note: `EXPOSE 8008` in the `Dockerfile` only documents the container port. Host port publishing, restart policy, container name, and volume mounting are configured with `docker run` flags.
