@@ -1,3 +1,10 @@
+[0.1.18]
+* Added logging
+* Fixed the 0 balance API key refund bug
+* Fixed debug logging on Docker
+* Added npub usage view for admins
+* Added client IDs for recent usage
+
 [0.1.17]
 * Added support for updating the role of an npub
 
