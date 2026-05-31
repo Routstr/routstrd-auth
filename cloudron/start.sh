@@ -41,5 +41,21 @@ if [[ ! -f /app/data/.initialized ]]; then
     echo "==> Initialization complete."
 fi
 
+# Ensure routstrd's config.json has authUrl pointing to the auth proxy so the
+# CLI routes management commands (npubs, clients, usage) through it.
+ROUTSTRD_CONFIG="${ROUTSTRD_DIR}/config.json"
+AUTH_URL="http://localhost:${ROUTSTRD_AUTH_PORT}"
+echo "==> Configuring authUrl (${AUTH_URL}) in ${ROUTSTRD_CONFIG}..."
+if [[ -f "${ROUTSTRD_CONFIG}" ]]; then
+    tmp="$(mktemp)"
+    bun -e "
+        const c = JSON.parse(await Bun.file(process.argv[1]).text());
+        c.authUrl = process.argv[2];
+        await Bun.write(process.argv[1], JSON.stringify(c, null, 2));
+    " "${ROUTSTRD_CONFIG}" "${AUTH_URL}"
+else
+    echo "{\"authUrl\": \"${AUTH_URL}\"}" > "${ROUTSTRD_CONFIG}"
+fi
+chown cloudron:cloudron "${ROUTSTRD_CONFIG}" 2>/dev/null || true
 echo "==> Starting supervisord..."
 exec /usr/bin/supervisord --configuration /etc/supervisor/supervisord-cloudron.conf -i RoutstrdApp
