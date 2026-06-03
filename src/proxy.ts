@@ -343,33 +343,87 @@ export class AuthProxy {
   }
 
   private async handleUsage(req: Request, path: string): Promise<Response> {
-    if (req.method !== "GET" || path !== "/usage") {
+    if (req.method !== "GET") {
       return this.json({ error: "Not found." }, 404);
     }
 
-    const auth = await this.authenticateNpub(
-      req,
-      req.headers.get("authorization"),
-      undefined,
-      "user",
-    );
-    if (auth instanceof Response) return auth;
+    if (path === "/usage") {
+      const auth = await this.authenticateNpub(
+        req,
+        req.headers.get("authorization"),
+        undefined,
+        "user",
+      );
+      if (auth instanceof Response) return auth;
 
-    const url = new URL(req.url);
-    const limit = this.parseLimit(url.searchParams.get("limit"));
-    const suffix = this.getNpubSuffix(auth.npub);
-    const clients = this.store
-      .getClients()
-      .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
-    const storedClientIds = clients.map((c) => c.clientId);
-    const entries = this.store
-      .getUsageByClientIds(storedClientIds, limit)
-      .map((entry) => ({
-        ...entry,
-        client: entry.client ? this.removeSuffixFromId(entry.client, suffix) : entry.client,
+      const url = new URL(req.url);
+      const limit = this.parseLimit(url.searchParams.get("limit"));
+      const suffix = this.getNpubSuffix(auth.npub);
+      const clients = this.store
+        .getClients()
+        .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
+      const storedClientIds = clients.map((c) => c.clientId);
+      const entries = this.store
+        .getUsageByClientIds(storedClientIds, limit)
+        .map((entry) => ({
+          ...entry,
+          client: entry.client ? this.removeSuffixFromId(entry.client, suffix) : entry.client,
+        }));
+
+      return this.json({ output: entries });
+    }
+
+    if (path === "/usage/summary") {
+      const auth = await this.authenticateNpub(
+        req,
+        req.headers.get("authorization"),
+        undefined,
+        "user",
+      );
+      if (auth instanceof Response) return auth;
+
+      const tz = Number.parseInt(new URL(req.url).searchParams.get("tz") || "0", 10) || 0;
+      const suffix = this.getNpubSuffix(auth.npub);
+      const clients = this.store
+        .getClients()
+        .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
+      const storedClientIds = clients.map((c) => c.clientId);
+
+      let summary;
+      try {
+        summary = this.store.getUsageSummary(storedClientIds, tz);
+      } catch {
+        return this.json({ error: "usage summary unavailable" }, 500);
+      }
+
+      // Strip npub suffixes from client ids and recent entries
+      summary.clients = summary.clients.map((c) => ({
+        ...c,
+        client: this.removeSuffixFromId(c.client, suffix),
+      }));
+      summary.recent = summary.recent.map((e) => ({
+        ...e,
+        client: e.client ? this.removeSuffixFromId(e.client, suffix) : e.client,
       }));
 
-    return this.json({ output: entries });
+      // Build single-npub npubs array from the scoped totals/models
+      summary.npubs = summary.totals.requests > 0
+        ? [{
+          npub: auth.npub,
+          ...summary.totals,
+          topModels: summary.models.slice(0, 5).map((m) => ({
+            modelId: m.modelId,
+            requests: m.requests,
+            satsCost: m.satsCost,
+            totalTokens: m.totalTokens,
+          })),
+        }]
+        : [];
+
+      return this.json({ output: summary });
+    }
+
+    return this.json({ error: "Not found." }, 404);
   }
 
   /** Handle /npubs management endpoints. */
@@ -493,7 +547,7 @@ export class AuthProxy {
       return this.handleClients(req, path);
     }
 
-    if (path === "/usage") {
+    if (path === "/usage" || path === "/usage/summary") {
       return this.handleUsage(req, path);
     }
 
