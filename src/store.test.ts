@@ -153,25 +153,56 @@ describe("AuthStore.getUsageSummary", () => {
     store.close();
   });
 
-  it("null model maps to 'unknown' client", () => {
+  it("null model_id aggregates as 'unknown'", () => {
     const path = tmpDbPath();
-    const db = createTestDb(path);
+    paths.push(path);
+    // Create the table without NOT NULL on model_id so we can seed a null value,
+    // exercising the mapAggRow null-grp → "unknown" guard in the models GROUP BY.
+    const db = new Database(path);
+    db.run(`CREATE TABLE IF NOT EXISTS sdk_storage (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS usage_tracking (
+        id TEXT PRIMARY KEY,
+        timestamp INTEGER NOT NULL,
+        model_id TEXT,
+        base_url TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        cost REAL NOT NULL,
+        sats_cost REAL NOT NULL,
+        prompt_tokens INTEGER NOT NULL,
+        completion_tokens INTEGER NOT NULL,
+        total_tokens INTEGER NOT NULL,
+        client TEXT,
+        session_id TEXT,
+        tags TEXT
+      )
+    `);
     seedClients(db, [{ clientId: "client-a", name: "A", apiKey: "key-a" }]);
-    // Insert a row with null client (will be filtered by getUsageSummary scoping)
-    // Insert a row with empty model_id — actually model_id is NOT NULL, test null client
-    // We test client: null scenario through cross-npub isolation test below
-    // Here test a model aggregated as "unknown" via empty string won't happen (NOT NULL).
-    // Test that a row with client in list is counted correctly.
-    seedRows(db, [
-      { modelId: "m1", baseUrl: "https://x.com", satsCost: 5, totalTokens: 200, client: "client-a" },
-    ]);
+    // One row with a known model, one with null model_id
+    db.run(
+      `INSERT INTO usage_tracking (id, timestamp, model_id, base_url, request_id, cost, sats_cost, prompt_tokens, completion_tokens, total_tokens, client, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
+      ["r1", Date.now(), "gpt-4", "https://x.com", "req-1", 0, 5, 0, 0, 100, "client-a"],
+    );
+    db.run(
+      `INSERT INTO usage_tracking (id, timestamp, model_id, base_url, request_id, cost, sats_cost, prompt_tokens, completion_tokens, total_tokens, client, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
+      ["r2", Date.now(), null, "https://x.com", "req-2", 0, 3, 0, 0, 50, "client-a"],
+    );
     db.close();
 
-    const store = makeStore(path);
+    const store = new AuthStore(path, []);
     const summary = store.getUsageSummary(["client-a"], 0);
-    expect(summary.clients[0]!.client).toBe("client-a");
-    // client in list, so no "unknown" here
-    expect(summary.models[0]!.modelId).toBe("m1");
+
+    expect(summary.totals.requests).toBe(2);
+    expect(summary.models.length).toBe(2);
+    const modelIds = summary.models.map((m) => m.modelId);
+    expect(modelIds).toContain("gpt-4");
+    expect(modelIds).toContain("unknown");
+    const unknownModel = summary.models.find((m) => m.modelId === "unknown")!;
+    expect(unknownModel.requests).toBe(1);
+    expect(unknownModel.satsCost).toBeCloseTo(3);
+
     store.close();
   });
 
