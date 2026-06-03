@@ -1,6 +1,6 @@
 import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
 import { validateNIP98Request } from "./nip98";
-import { type Client, type NpubRole, AuthStore } from "./store";
+import { type Client, type NpubRole, type UsageSummary, AuthStore } from "./store";
 
 /**
  * Thin proxy that validates Bearer tokens or NIP-98 Nostr HTTP auth events and
@@ -389,10 +389,11 @@ export class AuthProxy {
         .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
       const storedClientIds = clients.map((c) => c.clientId);
 
-      let summary;
+      let summary: UsageSummary | undefined;
       try {
         summary = this.store.getUsageSummary(storedClientIds, tz);
-      } catch {
+      } catch (err) {
+        console.error("[usage/summary] store error:", err);
         return this.json({ error: "usage summary unavailable" }, 500);
       }
 
