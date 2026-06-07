@@ -15,7 +15,7 @@ program
   .option("-h, --host <host>", "Host to bind")
   .option("-u, --upstream <url>", "Upstream routstrd URL")
   .option("-d, --db-path <path>", "Path to shared SQLite DB")
-  .action((opts) => {
+  .action(async (opts) => {
     const cfg = loadConfig();
     if (opts.port) cfg.port = opts.port;
     if (opts.host) cfg.host = opts.host;
@@ -29,7 +29,7 @@ program
     }
 
     const proxy = new AuthProxy(cfg);
-    proxy.serve();
+    await proxy.serve();
   });
 
 program

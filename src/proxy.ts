@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
 import { validateNIP98Request } from "./nip98";
 import { type Client, type NpubRole, AuthStore } from "./store";
@@ -573,8 +576,78 @@ export class AuthProxy {
     }, 401);
   }
 
+  /**
+   * On first run with zero npubs, generate a nsec if needed, persist it to
+   * the shared config.json, and register the derived npub as the first admin.
+   * This mirrors what `routstrd npubs register` does for interactive setups.
+   */
+  private async bootstrap(): Promise<void> {
+    if (this.store.countNpubs() > 0) return;
+
+    console.log("No npubs registered. Bootstrapping first admin npub...");
+
+    let config: Record<string, unknown> = {};
+    try {
+      if (existsSync(this.config.configFile)) {
+        const raw = await Bun.file(this.config.configFile).text();
+        config = JSON.parse(raw);
+      }
+    } catch {
+      console.warn(
+        `Could not read config file at ${this.config.configFile}. Starting fresh.`,
+      );
+    }
+
+    let secretKey: Uint8Array;
+    if (typeof config.nsec === "string" && config.nsec) {
+      try {
+        const decoded = nip19.decode(config.nsec);
+        if (decoded.type === "nsec") {
+          secretKey = decoded.data as Uint8Array;
+        } else {
+          throw new Error("Not an nsec");
+        }
+      } catch {
+        console.warn(
+          "Invalid nsec in config.json. Will generate a fresh identity.",
+        );
+        secretKey = generateSecretKey();
+        config.nsec = nip19.nsecEncode(secretKey);
+      }
+    } else {
+      secretKey = generateSecretKey();
+      config.nsec = nip19.nsecEncode(secretKey);
+    }
+
+    const pubkey = getPublicKey(secretKey);
+    const npub = nip19.npubEncode(pubkey);
+
+    // Persist if we changed anything.
+    try {
+      const dir = dirname(this.config.configFile);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      await Bun.write(
+        this.config.configFile,
+        JSON.stringify(config, null, 2) + "\n",
+      );
+      console.log(`Saved identity to ${this.config.configFile}`);
+    } catch (err) {
+      console.warn(
+        `Could not write config file at ${this.config.configFile}:`,
+        err,
+      );
+    }
+
+    this.store.addNpub(pubkey, "admin");
+    console.log(`Bootstrap complete. Registered first admin npub: ${npub}`);
+  }
+
   /** Start the Bun HTTP server. */
-  serve() {
+  async serve() {
+    await this.bootstrap();
+
     const { port, host } = this.config;
     const npubCount = this.store.countNpubs();
     console.log(`routstrd-auth proxy listening on http://${host}:${port}`);
