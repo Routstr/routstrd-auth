@@ -335,7 +335,7 @@ export class AuthProxy {
     return this.json({ error: "Not found." }, 404);
   }
 
-  private async handleUsage(req: Request, path: string): Promise<Response> {
+  private async handleUsage(req: Request): Promise<Response> {
     if (req.method !== "GET") {
       return this.json({ error: "Not found." }, 404);
     }
@@ -482,7 +482,7 @@ export class AuthProxy {
     }
 
     if (path === "/usage" || path === "/usage/summary") {
-      return this.handleUsage(req, path);
+      return this.handleUsage(req);
     }
 
     const isPublicPath = AuthProxy.isPublicPath(path);
