@@ -1,6 +1,6 @@
 import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
 import { validateNIP98Request } from "./nip98";
-import { type Client, type NpubRole, type UsageSummary, AuthStore } from "./store";
+import { type Client, type NpubRole, AuthStore } from "./store";
 
 /**
  * Thin proxy that validates Bearer tokens or NIP-98 Nostr HTTP auth events and
@@ -335,96 +335,29 @@ export class AuthProxy {
     return this.json({ error: "Not found." }, 404);
   }
 
-  private parseLimit(value: string | null, fallback = 10): number {
-    const requested = Number.parseInt(value || String(fallback), 10);
-    return Number.isFinite(requested) && requested > 0
-      ? Math.min(requested, 100000)
-      : fallback;
-  }
-
   private async handleUsage(req: Request, path: string): Promise<Response> {
     if (req.method !== "GET") {
       return this.json({ error: "Not found." }, 404);
     }
 
-    if (path === "/usage") {
-      const auth = await this.authenticateNpub(
-        req,
-        req.headers.get("authorization"),
-        undefined,
-        "user",
-      );
-      if (auth instanceof Response) return auth;
+    const auth = await this.authenticateNpub(
+      req,
+      req.headers.get("authorization"),
+      undefined,
+      "user",
+    );
+    if (auth instanceof Response) return auth;
 
-      const url = new URL(req.url);
-      const limit = this.parseLimit(url.searchParams.get("limit"));
-      const suffix = this.getNpubSuffix(auth.npub);
-      const clients = this.store
-        .getClients()
-        .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
-      const storedClientIds = clients.map((c) => c.clientId);
-      const entries = this.store
-        .getUsageByClientIds(storedClientIds, limit)
-        .map((entry) => ({
-          ...entry,
-          client: entry.client ? this.removeSuffixFromId(entry.client, suffix) : entry.client,
-        }));
+    // Forward to daemon with npub filter; daemon handles scoping and suffix stripping.
+    const url = new URL(req.url);
+    url.searchParams.set("npub", auth.npub);
 
-      return this.json({ output: entries });
-    }
+    const modifiedReq = new Request(url.toString(), {
+      method: req.method,
+      headers: req.headers,
+    });
 
-    if (path === "/usage/summary") {
-      const auth = await this.authenticateNpub(
-        req,
-        req.headers.get("authorization"),
-        undefined,
-        "user",
-      );
-      if (auth instanceof Response) return auth;
-
-      const tz = Number.parseInt(new URL(req.url).searchParams.get("tz") || "0", 10) || 0;
-      const suffix = this.getNpubSuffix(auth.npub);
-      const clients = this.store
-        .getClients()
-        .filter((c) => this.clientBelongsToNpub(c, auth.npub, suffix));
-      const storedClientIds = clients.map((c) => c.clientId);
-
-      let summary: UsageSummary | undefined;
-      try {
-        summary = this.store.getUsageSummary(storedClientIds, tz);
-      } catch (err) {
-        console.error("[usage/summary] store error:", err);
-        return this.json({ error: "usage summary unavailable" }, 500);
-      }
-
-      // Strip npub suffixes from client ids and recent entries
-      summary.clients = summary.clients.map((c) => ({
-        ...c,
-        client: this.removeSuffixFromId(c.client, suffix),
-      }));
-      summary.recent = summary.recent.map((e) => ({
-        ...e,
-        client: e.client ? this.removeSuffixFromId(e.client, suffix) : e.client,
-      }));
-
-      // Build single-npub npubs array from the scoped totals/models
-      summary.npubs = summary.totals.requests > 0
-        ? [{
-          npub: auth.npub,
-          ...summary.totals,
-          topModels: summary.models.slice(0, 5).map((m) => ({
-            modelId: m.modelId,
-            requests: m.requests,
-            satsCost: m.satsCost,
-            totalTokens: m.totalTokens,
-          })),
-        }]
-        : [];
-
-      return this.json({ output: summary });
-    }
-
-    return this.json({ error: "Not found." }, 404);
+    return this.forward(modifiedReq);
   }
 
   /** Handle /npubs management endpoints. */
