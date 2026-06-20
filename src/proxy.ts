@@ -34,9 +34,16 @@ export class AuthProxy {
     req: Request,
     body?: Uint8Array,
     stripAuth = true,
+    canonicalPath?: string,
   ): Promise<Response> {
     const url = new URL(req.url);
-    const upstreamUrl = `${this.config.upstream}${url.pathname}${url.search}`;
+    // Forward the CANONICAL path (collapsed slashes, single trailing slash
+    // stripped, traversal/percent-encoding resolved) so the proxy and the
+    // routstrd daemon agree on which route — and therefore which identity /
+    // authorization decision — applies. Falling back to the raw pathname keeps
+    // callers that do not pre-canonicalize working unchanged.
+    const forwardPath = canonicalPath ?? url.pathname;
+    const upstreamUrl = `${this.config.upstream}${forwardPath}${url.search}`;
 
     const headers = new Headers(req.headers);
     if (stripAuth) {
@@ -221,7 +228,7 @@ export class AuthProxy {
     };
   }
 
-  private async handleClients(req: Request, path: string): Promise<Response> {
+  private async handleClients(req: Request, path: string, canonicalPath: string): Promise<Response> {
     const body = req.method === "GET" || req.method === "HEAD"
       ? undefined
       : new Uint8Array(await req.arrayBuffer());
@@ -283,7 +290,7 @@ export class AuthProxy {
         headers: req.headers,
         body: upstreamBody,
       });
-      const response = await this.forward(upstreamReq, upstreamBody);
+      const response = await this.forward(upstreamReq, upstreamBody, true, canonicalPath);
 
       if (!response.ok) return response;
       const payload = await response.json() as {
@@ -334,7 +341,7 @@ export class AuthProxy {
         headers: req.headers,
         body: upstreamBody,
       });
-      const response = await this.forward(upstreamReq, upstreamBody);
+      const response = await this.forward(upstreamReq, upstreamBody, true, canonicalPath);
 
       if (!response.ok) return response;
       const payload = await response.json() as {
@@ -350,7 +357,7 @@ export class AuthProxy {
     return this.json({ error: "Not found." }, 404);
   }
 
-  private async handleUsage(req: Request): Promise<Response> {
+  private async handleUsage(req: Request, canonicalPath: string): Promise<Response> {
     if (req.method !== "GET") {
       return this.json({ error: "Not found." }, 404);
     }
@@ -372,7 +379,7 @@ export class AuthProxy {
       headers: req.headers,
     });
 
-    return this.forward(modifiedReq);
+    return this.forward(modifiedReq, undefined, true, canonicalPath);
   }
 
   /** Handle /npubs management endpoints. */
@@ -485,26 +492,44 @@ export class AuthProxy {
   /** Handle a single incoming request. */
   async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const path = url.pathname;
     const authorization = req.headers.get("authorization");
 
+    // SECURITY: canonicalize the request path ONCE, then classify + dispatch +
+    // forward on this single unambiguous form. Without this, trailing-slash,
+    // duplicate-slash, mixed-case and percent-encoded variants of a protected
+    // route slip past the exact-`Set.has` classifiers below while still routing
+    // to the same upstream resource — the admin Cashu-SPEND / wallet bypass.
+    const path = AuthProxy.canonicalizePath(url.pathname);
+    if (path === null) {
+      // Malformed encoding or path traversal above root: never forward an
+      // ambiguous path upstream.
+      return this.json({ error: "Invalid request path." }, 400);
+    }
+    // The canonical path is what we both AUTHORIZE on and FORWARD upstream so
+    // the daemon resolves the same route the proxy authorized. Case is
+    // preserved here; the protected-path classifiers lowercase internally so a
+    // case-only variant of a protected route is still recognized and gated.
+    const canonicalPath = path;
+
     if (path === "/npubs" || path.startsWith("/npubs/")) {
+      // handleNpubs performs only local store operations (no upstream forward),
+      // so it operates purely on the canonical path it receives here.
       return this.handleNpubs(req, path);
     }
 
     if (path === "/clients" || path === "/clients/add" || path === "/clients/delete") {
-      return this.handleClients(req, path);
+      return this.handleClients(req, path, canonicalPath);
     }
 
     if (path === "/usage" || path === "/usage/summary") {
-      return this.handleUsage(req);
+      return this.handleUsage(req, canonicalPath);
     }
 
     const isPublicPath = AuthProxy.isPublicPath(path);
 
     // --- Public path: forward immediately ---
     if (isPublicPath) {
-      return this.forward(req);
+      return this.forward(req, undefined, true, canonicalPath);
     }
 
     // --- Auth required ---
@@ -532,7 +557,7 @@ export class AuthProxy {
       }
 
       // Keep auth header for Bearer tokens so upstream can validate.
-      return this.forward(req, undefined, false);
+      return this.forward(req, undefined, false, canonicalPath);
     }
 
     const nip98Match = authorization.match(/^Nostr\s+(.+)$/i);
@@ -548,13 +573,13 @@ export class AuthProxy {
       if (AuthProxy.isAdminPath(path)) {
         const auth = await this.authenticateNpub(req, authorization, body, "admin");
         if (auth instanceof Response) return auth;
-        return this.forward(req, body);
+        return this.forward(req, body, true, canonicalPath);
       }
 
       if (AuthProxy.isNpubRestrictedPath(path)) {
         const auth = await this.authenticateNpub(req, authorization, body, "user");
         if (auth instanceof Response) return auth;
-        return this.forward(req, body);
+        return this.forward(req, body, true, canonicalPath);
       }
 
       // Default: any registered npub can access
@@ -579,7 +604,7 @@ export class AuthProxy {
         }, 403);
       }
 
-      return this.forward(req, body);
+      return this.forward(req, body, true, canonicalPath);
     }
 
     return this.json({
@@ -655,17 +680,86 @@ export class AuthProxy {
     "/wallet/mints/info",
   ]);
 
+  /**
+   * Canonicalize a raw request pathname to a single unambiguous form so the
+   * authorization classifiers below cannot be dodged by cosmetic variations
+   * that route to the SAME upstream resource.
+   *
+   * SECURITY: the routstrd daemon treats `/wallet/send/cashu`,
+   * `/wallet/send/cashu/`, `//wallet//send//cashu` and percent-encoded
+   * equivalents as the same route. Without canonicalization the proxy's
+   * exact-`Set.has` classifiers (isAdminPath / isNpubRestrictedPath) miss those
+   * variants, so a user-role npub or a Bearer API key would reach the
+   * admin-only Cashu-SPEND / wallet endpoints (live fund-loss class). We
+   * canonicalize ONCE at the top of handle() and classify + dispatch + forward
+   * on this form.
+   *
+   * Steps:
+   *  - percent-decode ONCE (unmasks `%2F`, `%2e`, mixed-case escapes); a
+   *    malformed escape yields `null` (caller rejects the request). Decoding
+   *    happens before splitting so an encoded separator (`%2F` / `%5C`) is
+   *    FOLDED into a real boundary and resolves to the same route it disguises;
+   *  - normalize backslashes to `/` (some clients/routers treat `\` as a
+   *    separator), then split on `/` and drop empty segments (collapses
+   *    duplicate + trailing slashes);
+   *  - resolve `.` / `..` traversal segments — a `..` that would escape the
+   *    root yields `null` (reject);
+   *  - rejoin with a single leading `/`; the empty result is root `/`.
+   *
+   * Single decode only: a doubly-encoded `%252F` decodes to the literal text
+   * `%2F` and stays inside its segment (it is NOT a separator), so we never
+   * over-fold.
+   *
+   * Case is PRESERVED here (callers lowercase only for the protected-path
+   * comparison — see note in handle()).
+   *
+   * DOCUMENTED FOLLOW-UP (case handling, requires confirming routstrd routing):
+   * the protected-path COMPARISON is case-insensitive so `/Wallet/Send/Cashu`
+   * is recognized and gated as the admin route. The path FORWARDED upstream
+   * still preserves the client's original case. This is the safe-by-default
+   * choice while routstrd's route case-sensitivity is unconfirmed from this
+   * repo:
+   *   - if routstrd is case-SENSITIVE, an odd-cased protected route simply 404s
+   *     at the daemon (no fund loss) — and folding case here could instead
+   *     mis-route a legitimately-authorized request;
+   *   - if routstrd is case-INSENSITIVE, the original-case path routes to the
+   *     same resource the proxy authorized.
+   * Either way there is NO authz bypass. If routstrd is later confirmed
+   * case-insensitive, also lowercasing the forwarded path would make proxy and
+   * daemon byte-identical; do that only after that confirmation.
+   */
+  static canonicalizePath(rawPath: string): string | null {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawPath);
+    } catch {
+      return null; // malformed percent-encoding
+    }
+    const out: string[] = [];
+    for (const segment of decoded.replace(/\\/g, "/").split("/")) {
+      if (segment === "") continue; // collapses duplicate + trailing slashes
+      if (segment === ".") continue;
+      if (segment === "..") {
+        if (out.length === 0) return null; // traversal above root
+        out.pop();
+        continue;
+      }
+      out.push(segment);
+    }
+    return "/" + out.join("/");
+  }
+
   static isPublicPath(path: string): boolean {
     if (AuthProxy.PUBLIC_PATHS.has(path)) return true;
     return AuthProxy.PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
   }
 
   static isAdminPath(path: string): boolean {
-    return AuthProxy.ADMIN_PATHS.has(path);
+    return AuthProxy.ADMIN_PATHS.has(path.toLowerCase());
   }
 
   static isNpubRestrictedPath(path: string): boolean {
-    return AuthProxy.NPUB_RESTRICTED_PATHS.has(path);
+    return AuthProxy.NPUB_RESTRICTED_PATHS.has(path.toLowerCase());
   }
 
   static isRestrictedPath(path: string): boolean {

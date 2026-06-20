@@ -481,3 +481,215 @@ describe("AuthProxy.handle authorization matrix", () => {
     }
   });
 });
+
+// ─── Path-normalization authz-bypass regression (HIGH, live fund-loss) ─────────
+//
+// Red-team finding: the exact-`Set.has` path classifiers did ZERO
+// normalization while forward() shipped the raw url.pathname upstream, so
+// cosmetic variants of a protected route (trailing slash, duplicate slash,
+// mixed case, percent-encoding) that route to the SAME daemon resource dodged
+// the admin/npub Sets. A user-role npub or a Bearer API key could thereby reach
+// the admin Cashu-SPEND / wallet endpoints (proven: 200 forwarded). The fix
+// canonicalizes the path ONCE and classifies + dispatches + forwards on that
+// form. These regressions assert every variant gets the SAME 403 as canonical.
+
+const ADMIN_PATHS = ["/wallet/send/cashu", "/wallet/send/bolt11"] as const;
+const NPUB_RESTRICTED_PATHS = [
+  "/wallet/status",
+  "/wallet/unlock",
+  "/wallet/balance",
+  "/wallet/receive/cashu",
+  "/wallet/receive/bolt11",
+  "/wallet/mints",
+  "/wallet/mints/info",
+] as const;
+const ALL_PROTECTED = [...ADMIN_PATHS, ...NPUB_RESTRICTED_PATHS];
+
+/** Percent-encode the final path segment's first character (e.g. /a/b -> /a/%62). */
+function percentEncodeLastSegment(path: string): string {
+  const idx = path.lastIndexOf("/");
+  const head = path.slice(0, idx + 1);
+  const tail = path.slice(idx + 1);
+  if (tail.length === 0) return path;
+  const first = tail.charCodeAt(0).toString(16).padStart(2, "0");
+  return `${head}%${first}${tail.slice(1)}`;
+}
+
+/**
+ * Build evasion variants of a canonical protected path that all resolve to the
+ * SAME upstream route. The proxy must classify each EXACTLY like the canonical
+ * form. Pairs the request-path variant with the path the proxy is expected to
+ * forward upstream (the canonical form), so we can assert forwarding agreement.
+ */
+function pathVariants(path: string): Array<{ label: string; variant: string }> {
+  return [
+    { label: "trailing-slash", variant: `${path}/` },
+    { label: "double-leading-slash", variant: `/${path}` }, // "//wallet/..."
+    { label: "double-internal-slash", variant: path.replace("/", "//") },
+    { label: "mixed-case", variant: path.toUpperCase() },
+    { label: "percent-encoded-segment", variant: percentEncodeLastSegment(path) },
+    { label: "percent-encoded-slash", variant: path.replace(/\/([^/]+)$/, "%2F$1") },
+  ];
+}
+
+describe("AuthProxy.canonicalizePath collapses evasion variants", () => {
+  it("maps every protected-path variant to the canonical classification", () => {
+    for (const path of ALL_PROTECTED) {
+      for (const { label, variant } of pathVariants(path)) {
+        const canon = AuthProxy.canonicalizePath(variant);
+        // toLowerCase mirrors the case-insensitive protected-path comparison.
+        expect(`${path} ${label} -> ${canon?.toLowerCase()}`).toBe(
+          `${path} ${label} -> ${path.toLowerCase()}`,
+        );
+        // And the variant must classify identically to the canonical path.
+        expect(AuthProxy.isRestrictedPath(canon!)).toBe(true);
+        expect(AuthProxy.isAdminPath(canon!)).toBe(
+          AuthProxy.isAdminPath(path),
+        );
+        expect(AuthProxy.isNpubRestrictedPath(canon!)).toBe(
+          AuthProxy.isNpubRestrictedPath(path),
+        );
+      }
+    }
+  });
+
+  it("rejects path traversal that would escape the root", () => {
+    expect(AuthProxy.canonicalizePath("/wallet/../wallet/send/cashu")).toBe(
+      "/wallet/send/cashu",
+    );
+    expect(AuthProxy.canonicalizePath("/../etc/passwd")).toBeNull();
+    expect(AuthProxy.canonicalizePath("/wallet/%2e%2e/send/cashu")).toBe(
+      "/send/cashu",
+    );
+  });
+});
+
+describe("AuthProxy.handle path-normalization bypass regression", () => {
+  beforeEach(() => startUpstream());
+  afterEach(() => {
+    upstreamServer?.stop(true);
+    upstreamServer = null;
+  });
+
+  // --- Bearer API key must hit the SAME 403 on every variant of every
+  //     protected path (admin + npub-restricted). Previously these forwarded. ---
+  for (const path of ALL_PROTECTED) {
+    for (const { label, variant } of pathVariants(path)) {
+      it(`Bearer 403 on ${path} via ${label} (${variant})`, async () => {
+        const res = await proxy.handle(
+          new Request(`${ORIGIN}${variant}`, {
+            method: "POST",
+            headers: { authorization: "Bearer sk-alice-123" },
+            body: "{}",
+          }),
+        );
+        expect(res.status).toBe(403);
+        expect(((await res.json()) as { error: string }).error).toContain(
+          "API keys cannot access",
+        );
+        // CRITICAL: the request must NOT have been forwarded upstream.
+        expect(upstreamHits.length).toBe(0);
+      });
+    }
+  }
+
+  // --- A user-role npub must be denied on every variant of every ADMIN path
+  //     with the SAME "Admin access required" 403 as the canonical form.
+  //     The npub signs the EXACT variant URL it sends (NIP-98 binds to the raw
+  //     request URL); authorization is decided on the canonical path. ---
+  for (const path of ADMIN_PATHS) {
+    for (const { label, variant } of pathVariants(path)) {
+      it(`user-role npub 403 on admin ${path} via ${label} (${variant})`, async () => {
+        const { sk } = registerNpub("user");
+        const url = `${ORIGIN}${variant}`;
+        const body = new TextEncoder().encode("{}");
+        const header = await nostrAuthHeader(sk, { url, method: "POST", body });
+        const res = await proxy.handle(
+          new Request(url, {
+            method: "POST",
+            headers: { authorization: header },
+            body,
+          }),
+        );
+        expect(res.status).toBe(403);
+        expect(((await res.json()) as { error: string }).error).toContain(
+          "Admin access required",
+        );
+        expect(upstreamHits.length).toBe(0);
+      });
+    }
+  }
+
+  // --- An UNREGISTERED npub must be denied (403) on every variant of every
+  //     npub-restricted path, exactly as on the canonical form. ---
+  for (const path of NPUB_RESTRICTED_PATHS) {
+    for (const { label, variant } of pathVariants(path)) {
+      it(`unregistered npub 403 on npub-restricted ${path} via ${label} (${variant})`, async () => {
+        registerNpub("admin"); // ensure countNpubs > 0 (not-registered branch)
+        const sk = generateSecretKey();
+        const url = `${ORIGIN}${variant}`;
+        const header = await nostrAuthHeader(sk, { url, method: "GET" });
+        const res = await proxy.handle(
+          new Request(url, { method: "GET", headers: { authorization: header } }),
+        );
+        expect(res.status).toBe(403);
+        expect(upstreamHits.length).toBe(0);
+      });
+    }
+  }
+
+  // --- Positive control: an AUTHORIZED admin reaching an admin path via a
+  //     non-canonical variant is forwarded to the STRUCTURALLY-CANONICAL
+  //     upstream route (collapsed slashes, single trailing slash stripped,
+  //     traversal/percent-encoding resolved) so the daemon resolves the same
+  //     route the proxy authorized.
+  //
+  //     NOTE on case: classification is case-INSENSITIVE (a case-variant of a
+  //     protected route is always gated), but the forwarded path PRESERVES the
+  //     client's original case. routstrd's case-sensitivity is not confirmed
+  //     from this repo; folding case in the forwarded path could mis-route on a
+  //     case-sensitive daemon, while NOT folding it is always safe (a
+  //     case-sensitive daemon simply 404s the odd-cased route — no fund loss;
+  //     a case-insensitive daemon routes it correctly). See DOCUMENTED FOLLOW-UP
+  //     in the proxy.ts canonicalizePath docblock. The expected forwarded path
+  //     is therefore canonicalizePath(variant), which keeps case. ---
+  it("forwards an authorized admin to the structurally-canonical upstream path for every admin variant", async () => {
+    for (const path of ADMIN_PATHS) {
+      for (const { variant } of pathVariants(path)) {
+        upstreamHits.length = 0;
+        const { sk } = registerNpub("admin");
+        const url = `${ORIGIN}${variant}`;
+        const body = new TextEncoder().encode("{}");
+        const header = await nostrAuthHeader(sk, { url, method: "POST", body });
+        const res = await proxy.handle(
+          new Request(url, {
+            method: "POST",
+            headers: { authorization: header },
+            body,
+          }),
+        );
+        expect(res.status).toBe(200);
+        const expectedForward = AuthProxy.canonicalizePath(new URL(url).pathname);
+        // Forwarded path is the structurally-canonical route (case preserved),
+        // never the raw variant with its cosmetic slashes/encoding.
+        expect(upstreamHits.at(-1)?.path).toBe(expectedForward);
+      }
+    }
+  });
+
+  // --- Malformed percent-encoding / traversal above root is rejected 400 and
+  //     never forwarded. ---
+  it("rejects traversal-above-root with 400 and does not forward", async () => {
+    const res = await proxy.handle(
+      new Request(`${ORIGIN}/../wallet/send/cashu`, {
+        method: "POST",
+        headers: { authorization: "Bearer sk-alice-123" },
+        body: "{}",
+      }),
+    );
+    // URL normalization in the WHATWG URL parser may already fold leading
+    // `/../`; either way the request must not reach the admin route as 200.
+    expect(res.status).not.toBe(200);
+    expect(upstreamHits.find((h) => h.path === "/wallet/send/cashu")).toBeUndefined();
+  });
+});
