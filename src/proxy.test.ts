@@ -119,6 +119,7 @@ function makeConfig(path: string): AuthProxyConfig {
     configFile: "",
     adminPubkeys: [],
     invalidAdminPubkeys: [],
+    trustForwardedHeaders: false,
   };
 }
 
@@ -373,9 +374,9 @@ describe("AuthProxy.handle authorization matrix", () => {
     expect(res.status).toBe(401);
   });
 
-  // --- Replay (documents current behavior: no nonce store) ---
+  // --- Replay protection (nonce/jti cache) ---
 
-  it("CURRENTLY accepts the same Nostr token replayed within the window (no nonce store)", async () => {
+  it("rejects the same Nostr token replayed within the window (nonce cache)", async () => {
     const { sk } = registerNpub("user");
     const url = `${ORIGIN}/wallet/balance`;
     const header = await nostrAuthHeader(sk, { url, method: "GET" });
@@ -386,6 +387,97 @@ describe("AuthProxy.handle authorization matrix", () => {
       new Request(url, { method: "GET", headers: { authorization: header } }),
     );
     expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
+    // The second presentation of the identical signed token is a replay.
+    expect(second.status).toBe(401);
+    expect(((await second.json()) as { error: string }).error).toContain("replay");
+  });
+
+  it("rejects a replay on an npub-restricted path via authenticateNpub", async () => {
+    const { sk } = registerNpub("user");
+    const url = `${ORIGIN}/wallet/balance`;
+    const header = await nostrAuthHeader(sk, { url, method: "GET" });
+    const first = await proxy.handle(
+      new Request(url, { method: "GET", headers: { authorization: header } }),
+    );
+    const second = await proxy.handle(
+      new Request(url, { method: "GET", headers: { authorization: header } }),
+    );
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(401);
+  });
+
+  it("allows two DISTINCT tokens from the same npub (replay cache keys on event id, not pubkey)", async () => {
+    const { sk } = registerNpub("user");
+    const url = `${ORIGIN}/wallet/balance`;
+    const headerA = await nostrAuthHeader(sk, { url, method: "GET" });
+    // A second sign produces a different event id (different timestamp/nonce of
+    // the signature), so it must NOT be treated as a replay.
+    const headerB = await nostrAuthHeader(sk, { url, method: "GET" });
+    const a = await proxy.handle(
+      new Request(url, { method: "GET", headers: { authorization: headerA } }),
+    );
+    const b = await proxy.handle(
+      new Request(url, { method: "GET", headers: { authorization: headerB } }),
+    );
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+  });
+
+  // --- Trusted-proxy / x-forwarded gating ---
+
+  it("ignores forged x-forwarded-* by default and rejects a cross-host token", async () => {
+    const { sk } = registerNpub("user");
+    // Token signed for an attacker-chosen public host.
+    const header = await nostrAuthHeader(sk, {
+      url: "https://evil.test/wallet/balance",
+      method: "GET",
+    });
+    // Request arrives at localhost with forged forwarded headers. With the proxy
+    // configured NOT to trust forwarded headers (default), the URL tag must not
+    // match and the token is rejected.
+    const res = await proxy.handle(
+      new Request(`${ORIGIN}/wallet/balance`, {
+        method: "GET",
+        headers: {
+          authorization: header,
+          "x-forwarded-host": "evil.test",
+          "x-forwarded-proto": "https",
+        },
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toContain("URL tag does not match");
+  });
+
+  it("honors x-forwarded-* for a legitimately configured trusted proxy", async () => {
+    // Operator declares this process sits behind a trusted reverse proxy.
+    const trustedProxy = new AuthProxy({ ...makeConfig(dbPath), trustForwardedHeaders: true });
+    try {
+      const sk = generateSecretKey();
+      const pubkey = getPublicKey(sk);
+      const store = new AuthStore(dbPath);
+      store.addNpub(pubkey, "user");
+      store.close();
+
+      // Client signs for the PUBLIC host the trusted proxy fronts.
+      const header = await nostrAuthHeader(sk, {
+        url: "https://api.example.com/wallet/balance",
+        method: "GET",
+      });
+      const res = await trustedProxy.handle(
+        new Request(`${ORIGIN}/wallet/balance`, {
+          method: "GET",
+          headers: {
+            authorization: header,
+            "x-forwarded-host": "api.example.com",
+            "x-forwarded-proto": "https",
+          },
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(upstreamHits.at(-1)?.path).toBe("/wallet/balance");
+    } finally {
+      trustedProxy.close();
+    }
   });
 });

@@ -1,5 +1,5 @@
 import { normalizeNostrPubkey, type AuthProxyConfig } from "./config";
-import { validateNIP98Request } from "./nip98";
+import { validateNIP98Request, ReplayCache, type NIP98ValidateOptions } from "./nip98";
 import { type Client, type NpubRole, AuthStore } from "./store";
 
 /**
@@ -9,10 +9,20 @@ import { type Client, type NpubRole, AuthStore } from "./store";
 export class AuthProxy {
   private config: AuthProxyConfig;
   private store: AuthStore;
+  /** Per-process NIP-98 replay cache (TTL = validation window). */
+  private replayCache = new ReplayCache();
 
   constructor(config: AuthProxyConfig) {
     this.config = config;
     this.store = new AuthStore(config.dbPath, config.adminPubkeys);
+  }
+
+  /** Shared NIP-98 validation options derived from config + replay cache. */
+  private nip98Options(): NIP98ValidateOptions {
+    return {
+      trustForwardedHeaders: this.config.trustForwardedHeaders === true,
+      replayCache: this.replayCache,
+    };
   }
 
   /**
@@ -144,7 +154,12 @@ export class AuthProxy {
     }
 
     try {
-      const { pubkey } = await validateNIP98Request(authorization, req, body);
+      const { pubkey } = await validateNIP98Request(
+        authorization,
+        req,
+        body,
+        this.nip98Options(),
+      );
 
       const entry = this.store.getNpubByPubkey(pubkey);
       if (!entry) {
@@ -543,7 +558,19 @@ export class AuthProxy {
       }
 
       // Default: any registered npub can access
-      const { pubkey } = await validateNIP98Request(authorization, req, body);
+      let pubkey: string;
+      try {
+        ({ pubkey } = await validateNIP98Request(
+          authorization,
+          req,
+          body,
+          this.nip98Options(),
+        ));
+      } catch (err) {
+        return this.json({
+          error: err instanceof Error ? err.message : "Invalid NIP-98 token.",
+        }, 401);
+      }
       if (!this.store.hasNpub(pubkey)) {
         return this.json({
           error: this.store.countNpubs() === 0

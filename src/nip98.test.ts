@@ -8,8 +8,10 @@ import {
 import {
   validateNIP98Request,
   isNIP98Authorization,
+  ReplayCache,
   NIP98_KIND,
   NIP98_MAX_AGE_SECONDS,
+  NIP98_REPLAY_TTL_SECONDS,
 } from "./nip98";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -232,44 +234,95 @@ describe("validateNIP98Request", () => {
       ).rejects.toThrow("URL tag does not match");
     });
 
-    // SECURITY / HARDENING NOTE:
-    // getAbsoluteRequestUrl() blindly trusts x-forwarded-host / x-forwarded-proto
-    // when rebuilding the URL the signed `u` tag is compared against. Any client
-    // that can set these headers (e.g. the request did NOT actually traverse the
-    // intended trusted reverse proxy) can make a NIP-98 token signed for an
-    // arbitrary host validate against this server — enabling cross-host token
-    // replay. This test documents the CURRENT (vulnerable) behavior so that any
-    // future hardening (an allowlist / trusted-proxy flag) will flip it to a
-    // rejection and surface the change loudly.
-    it("CURRENTLY accepts a forged x-forwarded-host that matches the signed host (documents trust gap)", async () => {
+    // SECURITY / HARDENING (FIXED):
+    // getAbsoluteRequestUrl() no longer trusts x-forwarded-host /
+    // x-forwarded-proto by default. A forged forwarded header from a client that
+    // did NOT traverse a trusted reverse proxy can no longer make a NIP-98 token
+    // signed for an arbitrary host validate. The default (no options /
+    // trustForwardedHeaders unset) MUST reject the cross-host token.
+    it("rejects a forged x-forwarded-host by default (forwarded headers untrusted)", async () => {
       const sk = generateSecretKey();
-      const pk = getPublicKey(sk);
       // Token signed for the attacker-chosen public host.
       const event = signEvent(sk, {
         url: "https://evil.test/wallet/balance",
         method: "GET",
       });
       // Request actually arrives at localhost but carries forged forwarded
-      // headers that make the server reconstruct https://evil.test/...
+      // headers. Without trusted-proxy config the headers are ignored, so the
+      // reconstructed URL stays http://localhost/... and the token is rejected.
       const req = makeRequest("http://localhost/wallet/balance", "GET", {
         "x-forwarded-host": "evil.test",
         "x-forwarded-proto": "https",
       });
-      const result = await validateNIP98Request(toAuthHeader(event), req);
-      // Documenting the current trust gap. If hardening lands, change this to
-      // `.rejects.toThrow(...)`.
+      await expect(
+        validateNIP98Request(toAuthHeader(event), req),
+      ).rejects.toThrow("URL tag does not match");
+    });
+
+    it("rejects a forged x-forwarded-host even when other env trust is off (explicit false)", async () => {
+      const sk = generateSecretKey();
+      const event = signEvent(sk, {
+        url: "https://evil.test/wallet/balance",
+        method: "GET",
+      });
+      const req = makeRequest("http://localhost/wallet/balance", "GET", {
+        "x-forwarded-host": "evil.test",
+        "x-forwarded-proto": "https",
+      });
+      await expect(
+        validateNIP98Request(toAuthHeader(event), req, undefined, {
+          trustForwardedHeaders: false,
+        }),
+      ).rejects.toThrow("URL tag does not match");
+    });
+
+    it("honors x-forwarded-host ONLY when trustForwardedHeaders is enabled (trusted proxy)", async () => {
+      const sk = generateSecretKey();
+      const pk = getPublicKey(sk);
+      // Client signs for the public host the trusted proxy fronts.
+      const event = signEvent(sk, {
+        url: "https://api.example.com/wallet/balance",
+        method: "GET",
+      });
+      const req = makeRequest("http://localhost/wallet/balance", "GET", {
+        "x-forwarded-host": "api.example.com",
+        "x-forwarded-proto": "https",
+      });
+      const result = await validateNIP98Request(
+        toAuthHeader(event),
+        req,
+        undefined,
+        { trustForwardedHeaders: true },
+      );
       expect(result.pubkey).toBe(pk);
     });
   });
 
   // ─── replay within the validity window ─────────────────────────────────────
 
-  // SECURITY / HARDENING NOTE:
-  // There is no nonce / jti / seen-event store, so the SAME signed event can be
-  // replayed any number of times within the ±60s window. This test documents
-  // that the second presentation of an identical token is CURRENTLY still
-  // accepted. A future replay cache should flip the second call to a rejection.
-  it("CURRENTLY accepts the same event replayed within the window (no nonce store)", async () => {
+  // SECURITY / HARDENING (FIXED):
+  // A replay cache (keyed on the NIP-98 event id, which doubles as the
+  // nonce/jti) now rejects the SECOND presentation of an identical signed token
+  // within the validation window.
+  it("rejects the same event replayed within the window (nonce cache)", async () => {
+    const sk = generateSecretKey();
+    const pk = getPublicKey(sk);
+    const event = signEvent(sk, { url, method: "GET" });
+    const header = toAuthHeader(event);
+    const replayCache = new ReplayCache();
+
+    const first = await validateNIP98Request(header, makeRequest(url, "GET"), undefined, {
+      replayCache,
+    });
+    expect(first.pubkey).toBe(pk);
+    await expect(
+      validateNIP98Request(header, makeRequest(url, "GET"), undefined, { replayCache }),
+    ).rejects.toThrow("replay");
+  });
+
+  it("still accepts a replay when no replay cache is supplied (opt-in at call site)", async () => {
+    // The pure validator is replay-protected only when a cache is passed; the
+    // proxy always passes one. This guards the backward-compatible default.
     const sk = generateSecretKey();
     const pk = getPublicKey(sk);
     const event = signEvent(sk, { url, method: "GET" });
@@ -279,5 +332,78 @@ describe("validateNIP98Request", () => {
     const second = await validateNIP98Request(header, makeRequest(url, "GET"));
     expect(first.pubkey).toBe(pk);
     expect(second.pubkey).toBe(pk);
+  });
+
+  it("does NOT poison the replay cache on a failed (bad-signature) validation", async () => {
+    const sk = generateSecretKey();
+    const event = signEvent(sk, { url, method: "GET" });
+    const lastChar = event.sig.slice(-1);
+    const tamperedChar = lastChar === "a" ? "b" : "a";
+    const tampered: Event = { ...event, sig: event.sig.slice(0, -1) + tamperedChar };
+    const replayCache = new ReplayCache();
+
+    // The tampered event fails signature verification and must NOT be recorded.
+    await expect(
+      validateNIP98Request(toAuthHeader(tampered), makeRequest(url, "GET"), undefined, {
+        replayCache,
+      }),
+    ).rejects.toThrow("Invalid NIP-98 event signature");
+    expect(replayCache.size()).toBe(0);
+
+    // The genuine event must still be accepted exactly once.
+    const ok = await validateNIP98Request(toAuthHeader(event), makeRequest(url, "GET"), undefined, {
+      replayCache,
+    });
+    expect(ok.pubkey).toBe(getPublicKey(sk));
+    expect(replayCache.size()).toBe(1);
+  });
+});
+
+// ─── ReplayCache unit tests ──────────────────────────────────────────────────
+
+describe("ReplayCache", () => {
+  it("reports unseen ids as not present, then present after add", () => {
+    const cache = new ReplayCache(60);
+    expect(cache.has("id-1")).toBe(false);
+    cache.add("id-1");
+    expect(cache.has("id-1")).toBe(true);
+    expect(cache.size()).toBe(1);
+  });
+
+  it("expires entries after the TTL window (id usable again)", () => {
+    const cache = new ReplayCache(60); // 60s TTL
+    const t0 = 1_000_000;
+    cache.add("id-1", t0);
+    // Within window: replay detected.
+    expect(cache.has("id-1", t0 + 59_000)).toBe(true);
+    // Past window: entry expired, no longer a replay.
+    expect(cache.has("id-1", t0 + 61_000)).toBe(false);
+    expect(cache.size(t0 + 61_000)).toBe(0);
+  });
+
+  it("default TTL covers the FULL token validity window (no late-replay gap)", () => {
+    // A token presented at the earliest moment it is valid (created_at - MAX_AGE)
+    // must still be remembered at the latest moment it is valid
+    // (created_at + MAX_AGE): a 2*MAX_AGE span. The default cache must not expire
+    // the entry before then.
+    expect(NIP98_REPLAY_TTL_SECONDS).toBe(2 * NIP98_MAX_AGE_SECONDS);
+    const cache = new ReplayCache(); // default TTL
+    const firstSeen = 1_000_000; // == created_at - MAX_AGE (earliest presentation)
+    cache.add("sig", firstSeen);
+    const latestValid = firstSeen + 2 * NIP98_MAX_AGE_SECONDS * 1000;
+    // Replay one millisecond before the token's own validity expires.
+    expect(cache.has("sig", latestValid - 1)).toBe(true);
+  });
+
+  it("sweeps expired entries on add so the map does not grow unbounded", () => {
+    const cache = new ReplayCache(10); // 10s TTL
+    const t0 = 1_000_000;
+    cache.add("old", t0);
+    expect(cache.size(t0)).toBe(1);
+    // Add a fresh entry well past the old one's TTL; the sweep should evict "old".
+    cache.add("new", t0 + 20_000);
+    expect(cache.has("old", t0 + 20_000)).toBe(false);
+    expect(cache.has("new", t0 + 20_000)).toBe(true);
+    expect(cache.size(t0 + 20_000)).toBe(1);
   });
 });

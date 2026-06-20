@@ -28,6 +28,22 @@ export const DEFAULT_UPSTREAM =
 /** Default host for the auth proxy. */
 export const DEFAULT_HOST = process.env.ROUTSTRD_AUTH_HOST || "0.0.0.0";
 
+/**
+ * Whether to trust `x-forwarded-proto` / `x-forwarded-host` when reconstructing
+ * the public request URL for NIP-98 validation. Defaults to FALSE: a directly
+ * exposed server must NOT trust client-controlled forwarded headers. Set
+ * `ROUTSTRD_AUTH_TRUSTED_PROXY=1` (or true/yes/on) ONLY when this process sits
+ * behind a reverse proxy that strips and rewrites these headers.
+ */
+export function parseTrustedProxyFlag(raw: string | undefined): boolean {
+  if (!raw) return false;
+  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+}
+
+export const TRUST_FORWARDED_HEADERS = parseTrustedProxyFlag(
+  process.env.ROUTSTRD_AUTH_TRUSTED_PROXY,
+);
+
 const ADMIN_PUBKEYS_RAW = [
   process.env.ROUTSTRD_AUTH_ADMIN_PUBKEYS,
   process.env.ROUTSTRD_AUTH_ADMIN_NPUBS,
@@ -97,6 +113,11 @@ export interface AuthProxyConfig {
   adminPubkeys: string[];
   /** Invalid admin pubkey env-var values, reported during validation. */
   invalidAdminPubkeys: string[];
+  /**
+   * Trust x-forwarded-* headers when reconstructing the public URL for NIP-98
+   * validation. Only enable behind a trusted reverse proxy. Default false.
+   */
+  trustForwardedHeaders: boolean;
 }
 
 /**
@@ -113,6 +134,7 @@ export function loadConfig(): AuthProxyConfig {
     configFile: CONFIG_FILE,
     adminPubkeys: adminPubkeys.pubkeys,
     invalidAdminPubkeys: adminPubkeys.invalid,
+    trustForwardedHeaders: TRUST_FORWARDED_HEADERS,
   };
 
   return config;
