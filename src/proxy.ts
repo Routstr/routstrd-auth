@@ -41,10 +41,22 @@ export class AuthProxy {
         : body ?? req.body;
 
     try {
-      return await fetch(upstreamUrl, {
+      const response = await fetch(upstreamUrl, {
         method: req.method,
         headers,
         body: requestBody,
+      });
+
+      // Tell nginx/reverse proxies not to buffer streamed responses. This is
+      // especially important for SSE/LLM streaming where buffering or idle
+      // proxy timeouts can make streams appear to end mid-response.
+      const responseHeaders = new Headers(response.headers);
+      responseHeaders.set("X-Accel-Buffering", "no");
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
       });
     } catch {
       return new Response("Upstream unreachable", { status: 502 });
