@@ -1,3 +1,6 @@
+[0.1.22]
+* Fix for streams being cut off in the middle, faster TUI rendering, LLM cache tokens display in the recent usage tab, and more fixes
+
 [0.1.21]
 * Added functionality to remove stale receive operations to cocod
 
