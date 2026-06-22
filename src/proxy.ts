@@ -591,7 +591,14 @@ export class AuthProxy {
     Bun.serve({
       port,
       hostname: host,
-      fetch: (req) => this.handle(req),
+      fetch: (req, server) => {
+        // LLM/SSE streams can legitimately have long quiet periods while the
+        // upstream model reasons, retries, or waits on tooling. Bun's default
+        // 10s idle timeout closes such in-flight requests, surfacing to clients
+        // as "terminated" even when the upstream stream eventually completes.
+        server.timeout(req, 0);
+        return this.handle(req);
+      },
     });
 
     // Graceful shutdown.
