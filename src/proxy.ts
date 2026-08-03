@@ -497,7 +497,10 @@ export class AuthProxy {
       return this.handleUsage(req);
     }
 
-    const isPublicPath = AuthProxy.isPublicPath(path);
+    // Reads only: the daemon routes a POST to these paths as a paid request.
+    const isPublicPath =
+      (req.method === "GET" || req.method === "HEAD") &&
+      AuthProxy.isPublicPath(path);
 
     // --- Public path: forward immediately ---
     if (isPublicPath) {
