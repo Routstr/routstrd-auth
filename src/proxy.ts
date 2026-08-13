@@ -481,6 +481,16 @@ export class AuthProxy {
 
   /** Handle a single incoming request. */
   async handle(req: Request): Promise<Response> {
+    const res = req.method === "OPTIONS"
+      ? new Response(null, { status: 204 })
+      : await this.route(req);
+    for (const [name, value] of Object.entries(AuthProxy.CORS_HEADERS)) {
+      res.headers.set(name, value);
+    }
+    return res;
+  }
+
+  private async route(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname;
     const authorization = req.headers.get("authorization");
@@ -555,15 +565,8 @@ export class AuthProxy {
       }
 
       // Default: any registered npub can access
-      const { pubkey } = await validateNIP98Request(authorization, req, body);
-      if (!this.store.hasNpub(pubkey)) {
-        return this.json({
-          error: this.store.countNpubs() === 0
-            ? "This endpoint requires a registered npub/pubkey, but none is configured. Register the first admin with 'routstrd npubs register'."
-            : "This endpoint requires NIP-98 auth from a registered npub/pubkey.",
-        }, 403);
-      }
-
+      const auth = await this.authenticateNpub(req, authorization, body, "user");
+      if (auth instanceof Response) return auth;
       return this.forward(req, body);
     }
 
@@ -618,6 +621,20 @@ export class AuthProxy {
   close(): void {
     this.store.close();
   }
+
+  /**
+   * `*` is safe here: no cookies or sessions, so a cross-origin page cannot
+   * borrow a visitor's identity, and anything non-public still needs its own key.
+   */
+  static CORS_HEADERS: Record<string, string> = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Authorization, Content-Type, X-Cashu, X-Routstr-Model",
+    "Access-Control-Expose-Headers":
+      "X-Cashu, X-Routstr-Request-Id, X-Routstr-Cost-Msats, X-Routstr-Cost-Usd, X-Routstr-Input-Cost-Msats, X-Routstr-Output-Cost-Msats",
+    "Access-Control-Max-Age": "86400",
+  };
 
   /** Minimal public endpoints that don't require auth. */
   static PUBLIC_PATHS = new Set([
