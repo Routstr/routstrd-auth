@@ -665,6 +665,14 @@ export class AuthProxy {
     "/wallet/receive/bolt11",
     "/wallet/mints",
     "/wallet/mints/info",
+    // Daemon control: an API key buys inference, nothing more. /providers is
+    // here because ?refresh=true rewrites the stored provider list.
+    "/stop",
+    "/refund",
+    "/refund/xcashu",
+    "/providers",
+    "/providers/enable",
+    "/providers/disable",
   ]);
 
   static isPublicPath(path: string): boolean {
@@ -677,7 +685,7 @@ export class AuthProxy {
   }
 
   static isNpubRestrictedPath(path: string): boolean {
-    return AuthProxy.NPUB_RESTRICTED_PATHS.has(path);
+    return AuthProxy.NPUB_RESTRICTED_PATHS.has(path) || path.startsWith("/nwc/");
   }
 
   static isRestrictedPath(path: string): boolean {
