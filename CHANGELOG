@@ -1,3 +1,8 @@
+[0.1.24]
+* Added CORS support for browser clients
+* Fixed public path handling to only treat reads as public
+* Fixed API key exposure in daemon control endpoints
+
 [0.1.23]
 * Added TEE E2EE support to routstr-sdk and routstrd
 * Major fixes and stability improvements
