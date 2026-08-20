@@ -45,6 +45,18 @@ function getAbsoluteRequestUrl(req: Request): string {
   // Bun's Request.url is already absolute. Honor common reverse-proxy headers so
   // deployments behind TLS/load-balancers can validate the public URL clients
   // actually signed.
+  //
+  // SECURITY / HARDENING (tracked by src/nip98.test.ts "x-forwarded-host"):
+  // These x-forwarded-* headers are CLIENT-CONTROLLED unless a trusted reverse
+  // proxy strips/overwrites them. If a request reaches this process without
+  // traversing that trusted proxy, an attacker can set x-forwarded-host /
+  // x-forwarded-proto to any value and make a NIP-98 token signed for an
+  // arbitrary public host validate here (cross-host token replay). When this
+  // server is exposed directly (no fronting proxy), these headers MUST NOT be
+  // trusted. A future hardening should gate this on an explicit
+  // `trustForwardedHeaders` / trusted-proxy allowlist config and otherwise use
+  // only the real `host` header. See nip98.test.ts for the current-behavior
+  // regression that will flip once hardening lands.
   const url = new URL(req.url);
   const forwardedProto = firstHeaderValue(req.headers.get("x-forwarded-proto"));
   const forwardedHost = firstHeaderValue(req.headers.get("x-forwarded-host"));
