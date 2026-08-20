@@ -108,6 +108,26 @@ export class AuthStore {
     return this.getClients().length > 0;
   }
 
+  /**
+   * Read the Routstr 21 model allowlist from the shared sdk_storage table.
+   *
+   * The daemon's SDK populates this on startup/refresh by fetching kind 38423
+   * Nostr events. Returns an empty array if the key is missing or unparseable
+   * — callers should fail-open in that case (daemon hasn't bootstrapped yet).
+   */
+  getRoutstr21Models(): string[] {
+    const row = this.db
+      .query("SELECT value FROM sdk_storage WHERE key = 'routstr21Models'")
+      .get() as { value: string } | null;
+    if (!row?.value) return [];
+    try {
+      const parsed = JSON.parse(row.value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
   listNpubs(role?: NpubRole): NpubEntry[] {
     const where = role ? " WHERE role = ?" : "";
     const params = role ? [role] : [];
