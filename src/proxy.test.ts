@@ -65,7 +65,6 @@ function makeConfig(dbPath: string, overrides: Partial<AuthProxyConfig> = {}): A
     adminPubkeys: [],
     invalidAdminPubkeys: [],
     modelAllowlistEnabled: true,
-    allowedModelsOverride: null,
     ...overrides,
   };
 }
@@ -279,58 +278,6 @@ describe("Model Allowlist Enforcement (AUTH-001)", () => {
       const res = await proxy.handle(req);
       expect(res.status).toBe(200);
       expect(upstream.calls).toHaveLength(1);
-    });
-  });
-
-  describe("config: allowedModelsOverride", () => {
-    it("uses override list instead of DB", async () => {
-      proxy = new AuthProxy(
-        makeConfig(tmp.dbPath, { allowedModelsOverride: ["custom/model-only"] }),
-      );
-
-      // This model is in the DB but NOT in the override → should be blocked
-      const req1 = new Request("http://localhost:8008/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${TEST_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ model: "routstr/gpt-4o", messages: [] }),
-      });
-
-      const res1 = await proxy.handle(req1);
-      expect(res1.status).toBe(403);
-
-      // This model is in the override → should be allowed
-      const req2 = new Request("http://localhost:8008/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${TEST_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ model: "custom/model-only", messages: [] }),
-      });
-
-      const res2 = await proxy.handle(req2);
-      expect(res2.status).toBe(200);
-    });
-
-    it("fail-opens when override is an empty array", async () => {
-      proxy = new AuthProxy(
-        makeConfig(tmp.dbPath, { allowedModelsOverride: [] }),
-      );
-
-      const req = new Request("http://localhost:8008/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${TEST_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ model: "any/model", messages: [] }),
-      });
-
-      const res = await proxy.handle(req);
-      expect(res.status).toBe(200);
     });
   });
 

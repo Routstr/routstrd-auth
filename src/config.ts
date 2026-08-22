@@ -86,14 +86,6 @@ function parseAdminPubkeys(raw: string): {
 export const MODEL_ALLOWLIST_ENABLED =
   process.env.ROUTSTRD_AUTH_MODEL_ALLOWLIST !== "false";
 
-/** Optional static override for allowed models (comma-separated). If set, takes precedence over the DB allowlist. */
-export const ALLOWED_MODELS_OVERRIDE =
-  process.env.ROUTSTRD_AUTH_ALLOWED_MODELS
-    ? process.env.ROUTSTRD_AUTH_ALLOWED_MODELS.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : null;
-
 export interface AuthProxyConfig {
   /** Public port to listen on. */
   port: number;
@@ -111,8 +103,6 @@ export interface AuthProxyConfig {
   invalidAdminPubkeys: string[];
   /** Whether model allowlist enforcement is enabled. */
   modelAllowlistEnabled: boolean;
-  /** Optional static override for allowed models (null = use DB allowlist). */
-  allowedModelsOverride: string[] | null;
 }
 
 /**
@@ -130,7 +120,6 @@ export function loadConfig(): AuthProxyConfig {
     adminPubkeys: adminPubkeys.pubkeys,
     invalidAdminPubkeys: adminPubkeys.invalid,
     modelAllowlistEnabled: MODEL_ALLOWLIST_ENABLED,
-    allowedModelsOverride: ALLOWED_MODELS_OVERRIDE,
   };
 
   return config;

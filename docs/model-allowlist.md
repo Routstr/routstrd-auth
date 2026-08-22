@@ -33,16 +33,6 @@ export ROUTSTRD_AUTH_MODEL_ALLOWLIST=false
 
 When disabled, all models pass through — no body buffering or model check occurs.
 
-### Static Override
-
-To use a custom model list instead of the DB-fetched Routstr 21 list:
-
-```bash
-export ROUTSTRD_AUTH_ALLOWED_MODELS=routstr/gpt-4o,routstr/claude-3.5-sonnet
-```
-
-Comma-separated model IDs. When set, this takes precedence over the DB allowlist. An empty value fail-opens (allows all models).
-
 ## Fail-Open Behavior
 
 If the `routstr21Models` key is not yet in the database (e.g., the daemon hasn't bootstrapped), the proxy **fails open** — all models are allowed. This prevents the proxy from blocking all traffic during startup. A warning is not logged at the proxy level (the daemon logs its own bootstrap status).
@@ -63,7 +53,6 @@ The allowlist is updated automatically by the routstrd daemon:
 2. The fetched model list is persisted to the shared SQLite DB under key `routstr21Models`.
 3. The auth proxy reads the latest value on every request (no caching) — changes are picked up immediately.
 
-To manually override the list without Nostr, use the `ROUTSTRD_AUTH_ALLOWED_MODELS` environment variable.
 
 ## Performance
 

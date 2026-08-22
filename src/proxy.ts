@@ -190,7 +190,7 @@ export class AuthProxy {
    * Behavior:
    * - Skips if allowlist enforcement is disabled via config.
    * - Skips non-POST requests or requests without a body.
-   * - Uses `allowedModelsOverride` from config if set, otherwise reads from DB.
+   * - Reads the allowlist from the shared DB.
    * - Fails open (allows all) if the allowlist is empty — the daemon may not
    *   have bootstrapped the model list yet.
    * - Skips if the body isn't valid JSON or has no `model` field.
@@ -202,8 +202,7 @@ export class AuthProxy {
     if (!this.config.modelAllowlistEnabled) return null;
     if (method !== "POST" || !body || body.byteLength === 0) return null;
 
-    const allowlist =
-      this.config.allowedModelsOverride ?? this.store.getRoutstr21Models();
+    const allowlist = this.store.getRoutstr21Models();
     if (allowlist.length === 0) return null; // fail-open: daemon hasn't bootstrapped
 
     let parsed: { model?: unknown };
@@ -658,7 +657,7 @@ export class AuthProxy {
     console.log(`  Upstream: ${this.config.upstream}`);
     console.log(`  DB path:  ${this.config.dbPath}`);
     console.log(`  Registered npubs: ${npubCount}`);
-    console.log(`  Model allowlist: ${this.config.modelAllowlistEnabled ? "enabled" : "disabled"}${this.config.allowedModelsOverride ? " (static override)" : ""}`);
+    console.log(`  Model allowlist: ${this.config.modelAllowlistEnabled ? "enabled" : "disabled"}`);
     if (npubCount === 0) {
       console.warn(
         "  Warning: no registered npub/pubkey. " +

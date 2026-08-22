@@ -46,7 +46,7 @@ program
     console.log(`  Upstream: ${cfg.upstream}`);
     console.log(`  DB path:  ${cfg.dbPath}`);
     console.log(`  Bootstrap admin npubs/pubkeys from env: ${cfg.adminPubkeys.length}`);
-    console.log(`  Model allowlist: ${cfg.modelAllowlistEnabled ? "enabled" : "disabled"}${cfg.allowedModelsOverride ? " (static override)" : ""}`);
+    console.log(`  Model allowlist: ${cfg.modelAllowlistEnabled ? "enabled" : "disabled"}`);
 
     const err = validateConfig(cfg);
     if (err) {
