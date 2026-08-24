@@ -33,7 +33,7 @@ export class AuthStore {
   constructor(dbPath: string, bootstrapAdminPubkeys: string[] = []) {
     this.db = new Database(dbPath);
     this.migrateNpubTable();
-    this.bootstrapAdminPubkeys(bootstrapAdminPubkeys);
+    this.reconcileEnvAdminPubkeys(bootstrapAdminPubkeys);
   }
 
   /**
@@ -70,19 +70,39 @@ export class AuthStore {
     })();
   }
 
-  private bootstrapAdminPubkeys(pubkeys: string[]): void {
-    const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO routstr_auth_npubs
-        (pubkey, npub, created_at, created_by, source, role)
-      VALUES
-        (?, ?, ?, NULL, 'env', 'admin')
-    `);
-
-    const now = Math.floor(Date.now() / 1000);
+  /**
+   * Bootstrap env-provided admin pubkeys and delete `source='env'` rows no
+   * longer present in the env — otherwise removing a pubkey from the variable
+   * would leave it admin forever. `source='api'` rows are never touched.
+   */
+  private reconcileEnvAdminPubkeys(pubkeys: string[]): void {
     const uniquePubkeys = [...new Set(pubkeys.map((p) => p.toLowerCase()))];
-    for (const pubkey of uniquePubkeys) {
-      insert.run(pubkey, nip19.npubEncode(pubkey), now);
-    }
+    const keep = new Set(uniquePubkeys);
+    const now = Math.floor(Date.now() / 1000);
+
+    this.db.transaction(() => {
+      const insert = this.db.prepare(`
+        INSERT OR IGNORE INTO routstr_auth_npubs
+          (pubkey, npub, created_at, created_by, source, role)
+        VALUES
+          (?, ?, ?, NULL, 'env', 'admin')
+      `);
+      for (const pubkey of uniquePubkeys) {
+        insert.run(pubkey, nip19.npubEncode(pubkey), now);
+      }
+
+      const envRows = this.db
+        .query("SELECT pubkey FROM routstr_auth_npubs WHERE source = 'env'")
+        .all() as Array<{ pubkey: string }>;
+      const remove = this.db.prepare(
+        "DELETE FROM routstr_auth_npubs WHERE source = 'env' AND pubkey = ?",
+      );
+      for (const row of envRows) {
+        if (!keep.has(row.pubkey.toLowerCase())) {
+          remove.run(row.pubkey);
+        }
+      }
+    })();
   }
 
   /** Read all clients from the sdk_storage JSON blob. */
