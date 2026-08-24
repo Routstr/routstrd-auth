@@ -17,7 +17,9 @@ ROUTSTRD_PORT="${ROUTSTRD_PORT:-${PORT:-8008}}"
 ROUTSTRD_AUTH_PORT="${ROUTSTRD_AUTH_PORT:-8080}"
 ROUTSTRD_AUTH_HOST="${ROUTSTRD_AUTH_HOST:-0.0.0.0}"
 ROUTSTRD_UPSTREAM="${ROUTSTRD_UPSTREAM:-http://localhost:${ROUTSTRD_PORT}}"
-ROUTSTRD_AUTH_ADMIN_NPUBS="${ROUTSTRD_AUTH_ADMIN_NPUBS:-npub1l3m0300w4lph5kjfnvazgpj8wnv2tgpv9xdxft9qwt8ccmyz0v0s58tptp}"
+# No default admin npub: unset leaves the npubs table empty so the operator
+# bootstraps the first admin via unauthenticated POST /npubs (or sets the var).
+ROUTSTRD_AUTH_ADMIN_NPUBS="${ROUTSTRD_AUTH_ADMIN_NPUBS:-}"
 export ROUTSTRD_AUTH_PORT ROUTSTRD_AUTH_HOST ROUTSTRD_UPSTREAM ROUTSTRD_AUTH_ADMIN_NPUBS
 
 _term() {
