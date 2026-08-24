@@ -302,6 +302,27 @@ describe("Model Allowlist Enforcement (AUTH-001)", () => {
     });
   });
 
+  // --- Edge-case JSON bodies ---
+
+  describe("edge-case JSON bodies", () => {
+    it("skips model check for a JSON null body (does not throw)", async () => {
+      proxy = new AuthProxy(makeConfig(tmp.dbPath));
+
+      const req = new Request("http://localhost:8008/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${TEST_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: "null",
+      });
+
+      const res = await proxy.handle(req);
+      expect(res.status).toBe(200);
+      expect(upstream.calls).toHaveLength(1);
+    });
+  });
+
   // --- Store method ---
 
   describe("AuthStore.getRoutstr21Models()", () => {

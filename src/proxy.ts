@@ -205,14 +205,18 @@ export class AuthProxy {
     const allowlist = this.store.getRoutstr21Models();
     if (allowlist.length === 0) return null; // fail-open: daemon hasn't bootstrapped
 
-    let parsed: { model?: unknown };
+    let parsed: unknown;
     try {
       parsed = JSON.parse(new TextDecoder().decode(body));
     } catch {
       return null; // non-JSON body — skip check
     }
 
-    const model = typeof parsed.model === "string" ? parsed.model : "";
+    let model = "";
+    if (typeof parsed === "object" && parsed !== null) {
+      const value = (parsed as { model?: unknown }).model;
+      if (typeof value === "string") model = value;
+    }
     if (!model) return null; // no model field — let upstream handle it
 
     if (!allowlist.includes(model)) {
