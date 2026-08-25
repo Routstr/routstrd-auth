@@ -82,6 +82,10 @@ function parseAdminPubkeys(raw: string): {
   return { pubkeys: [...pubkeys], invalid };
 }
 
+/** Whether model allowlist enforcement is enabled (default: true). Set ROUTSTRD_AUTH_MODEL_ALLOWLIST=false to disable. */
+export const MODEL_ALLOWLIST_ENABLED =
+  process.env.ROUTSTRD_AUTH_MODEL_ALLOWLIST !== "false";
+
 export interface AuthProxyConfig {
   /** Public port to listen on. */
   port: number;
@@ -97,6 +101,8 @@ export interface AuthProxyConfig {
   adminPubkeys: string[];
   /** Invalid admin pubkey env-var values, reported during validation. */
   invalidAdminPubkeys: string[];
+  /** Whether model allowlist enforcement is enabled. */
+  modelAllowlistEnabled: boolean;
 }
 
 /**
@@ -113,6 +119,7 @@ export function loadConfig(): AuthProxyConfig {
     configFile: CONFIG_FILE,
     adminPubkeys: adminPubkeys.pubkeys,
     invalidAdminPubkeys: adminPubkeys.invalid,
+    modelAllowlistEnabled: MODEL_ALLOWLIST_ENABLED,
   };
 
   return config;

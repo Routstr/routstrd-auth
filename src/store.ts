@@ -33,7 +33,7 @@ export class AuthStore {
   constructor(dbPath: string, bootstrapAdminPubkeys: string[] = []) {
     this.db = new Database(dbPath);
     this.migrateNpubTable();
-    this.bootstrapAdminPubkeys(bootstrapAdminPubkeys);
+    this.reconcileEnvAdminPubkeys(bootstrapAdminPubkeys);
   }
 
   /**
@@ -70,19 +70,39 @@ export class AuthStore {
     })();
   }
 
-  private bootstrapAdminPubkeys(pubkeys: string[]): void {
-    const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO routstr_auth_npubs
-        (pubkey, npub, created_at, created_by, source, role)
-      VALUES
-        (?, ?, ?, NULL, 'env', 'admin')
-    `);
-
-    const now = Math.floor(Date.now() / 1000);
+  /**
+   * Bootstrap env-provided admin pubkeys and delete `source='env'` rows no
+   * longer present in the env — otherwise removing a pubkey from the variable
+   * would leave it admin forever. `source='api'` rows are never touched.
+   */
+  private reconcileEnvAdminPubkeys(pubkeys: string[]): void {
     const uniquePubkeys = [...new Set(pubkeys.map((p) => p.toLowerCase()))];
-    for (const pubkey of uniquePubkeys) {
-      insert.run(pubkey, nip19.npubEncode(pubkey), now);
-    }
+    const keep = new Set(uniquePubkeys);
+    const now = Math.floor(Date.now() / 1000);
+
+    this.db.transaction(() => {
+      const insert = this.db.prepare(`
+        INSERT OR IGNORE INTO routstr_auth_npubs
+          (pubkey, npub, created_at, created_by, source, role)
+        VALUES
+          (?, ?, ?, NULL, 'env', 'admin')
+      `);
+      for (const pubkey of uniquePubkeys) {
+        insert.run(pubkey, nip19.npubEncode(pubkey), now);
+      }
+
+      const envRows = this.db
+        .query("SELECT pubkey FROM routstr_auth_npubs WHERE source = 'env'")
+        .all() as Array<{ pubkey: string }>;
+      const remove = this.db.prepare(
+        "DELETE FROM routstr_auth_npubs WHERE source = 'env' AND pubkey = ?",
+      );
+      for (const row of envRows) {
+        if (!keep.has(row.pubkey.toLowerCase())) {
+          remove.run(row.pubkey);
+        }
+      }
+    })();
   }
 
   /** Read all clients from the sdk_storage JSON blob. */
@@ -106,6 +126,26 @@ export class AuthStore {
   /** Check if any clients exist (for bootstrap detection). */
   hasAnyClients(): boolean {
     return this.getClients().length > 0;
+  }
+
+  /**
+   * Read the Routstr 21 model allowlist from the shared sdk_storage table.
+   *
+   * The daemon's SDK populates this on startup/refresh by fetching kind 38423
+   * Nostr events. Returns an empty array if the key is missing or unparseable
+   * — callers should fail-open in that case (daemon hasn't bootstrapped yet).
+   */
+  getRoutstr21Models(): string[] {
+    const row = this.db
+      .query("SELECT value FROM sdk_storage WHERE key = 'routstr21Models'")
+      .get() as { value: string } | null;
+    if (!row?.value) return [];
+    try {
+      const parsed = JSON.parse(row.value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 
   listNpubs(role?: NpubRole): NpubEntry[] {

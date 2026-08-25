@@ -1,3 +1,8 @@
+[0.1.25]
+* Added a models allowlist to only allow whitelisted models through the proxy
+* Security: removed the hardcoded default admin npub from the Docker entrypoint; deployments must now bootstrap an admin explicitly
+* Security: env-sourced admin npubs removed from the env var are deleted at startup instead of persisting
+
 [0.1.24]
 * Added CORS support for browser clients
 * Fixed public path handling to only treat reads as public

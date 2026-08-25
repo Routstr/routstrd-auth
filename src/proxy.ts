@@ -181,6 +181,56 @@ export class AuthProxy {
     }
   }
 
+  /**
+   * Check if a request's model field is in the Routstr 21 allowlist.
+   *
+   * Returns `null` if the request is allowed (or if the check doesn't apply).
+   * Returns a `Response` (403) if the model is not in the allowlist.
+   *
+   * Behavior:
+   * - Skips if allowlist enforcement is disabled via config.
+   * - Skips non-POST requests or requests without a body.
+   * - Reads the allowlist from the shared DB.
+   * - Fails open (allows all) if the allowlist is empty — the daemon may not
+   *   have bootstrapped the model list yet.
+   * - Skips if the body isn't valid JSON or has no `model` field.
+   */
+  private checkModelAllowlist(
+    body: Uint8Array | undefined,
+    method: string,
+  ): Response | null {
+    if (!this.config.modelAllowlistEnabled) return null;
+    if (method !== "POST" || !body || body.byteLength === 0) return null;
+
+    const allowlist = this.store.getRoutstr21Models();
+    if (allowlist.length === 0) return null; // fail-open: daemon hasn't bootstrapped
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(body));
+    } catch {
+      return null; // non-JSON body — skip check
+    }
+
+    let model = "";
+    if (typeof parsed === "object" && parsed !== null) {
+      const value = (parsed as { model?: unknown }).model;
+      if (typeof value === "string") model = value;
+    }
+    if (!model) return null; // no model field — let upstream handle it
+
+    if (!allowlist.includes(model)) {
+      return this.json(
+        {
+          error: `Model '${model}' is not in the Routstr 21 allowlist. Available models: ${allowlist.join(", ")}`,
+        },
+        403,
+      );
+    }
+
+    return null;
+  }
+
   private getNpubSuffix(npub: string): string {
     return npub.slice(-7);
   }
@@ -541,8 +591,20 @@ export class AuthProxy {
         return this.json({ error: "Invalid API key." }, 401);
       }
 
+      // Buffer the body for POST requests so we can enforce the model
+      // allowlist. Bearer requests previously streamed the body directly;
+      // the tradeoff is a small latency cost for the buffer, but it's
+      // necessary to inspect the `model` field.
+      const body =
+        req.method === "POST" || req.method === "PUT" || req.method === "PATCH"
+          ? new Uint8Array(await req.arrayBuffer())
+          : undefined;
+
+      const blocked = this.checkModelAllowlist(body, req.method);
+      if (blocked) return blocked;
+
       // Keep auth header for Bearer tokens so upstream can validate.
-      return this.forward(req, undefined, false);
+      return this.forward(req, body, false);
     }
 
     const nip98Match = authorization.match(/^Nostr\s+(.+)$/i);
@@ -558,18 +620,30 @@ export class AuthProxy {
       if (AuthProxy.isAdminPath(path)) {
         const auth = await this.authenticateNpub(req, authorization, body, "admin");
         if (auth instanceof Response) return auth;
+
+        const blocked = this.checkModelAllowlist(body, req.method);
+        if (blocked) return blocked;
+
         return this.forward(req, body);
       }
 
       if (AuthProxy.isNpubRestrictedPath(path)) {
         const auth = await this.authenticateNpub(req, authorization, body, "user");
         if (auth instanceof Response) return auth;
+
+        const blocked = this.checkModelAllowlist(body, req.method);
+        if (blocked) return blocked;
+
         return this.forward(req, body);
       }
 
       // Default: any registered npub can access
       const auth = await this.authenticateNpub(req, authorization, body, "user");
       if (auth instanceof Response) return auth;
+
+      const blocked = this.checkModelAllowlist(body, req.method);
+      if (blocked) return blocked;
+
       return this.forward(req, body);
     }
 
@@ -587,6 +661,7 @@ export class AuthProxy {
     console.log(`  Upstream: ${this.config.upstream}`);
     console.log(`  DB path:  ${this.config.dbPath}`);
     console.log(`  Registered npubs: ${npubCount}`);
+    console.log(`  Model allowlist: ${this.config.modelAllowlistEnabled ? "enabled" : "disabled"}`);
     if (npubCount === 0) {
       console.warn(
         "  Warning: no registered npub/pubkey. " +
