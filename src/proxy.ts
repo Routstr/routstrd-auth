@@ -591,14 +591,16 @@ export class AuthProxy {
         return this.json({ error: "Invalid API key." }, 401);
       }
 
-      // Buffer the body for POST requests so we can enforce the model
-      // allowlist. Bearer requests previously streamed the body directly;
-      // the tradeoff is a small latency cost for the buffer, but it's
-      // necessary to inspect the `model` field.
-      const body =
-        req.method === "POST" || req.method === "PUT" || req.method === "PATCH"
-          ? new Uint8Array(await req.arrayBuffer())
-          : undefined;
+      // Buffer the body only when model allowlist enforcement is enabled,
+      // so we can inspect the `model` field. When disabled, keep the
+      // original streaming body to avoid the buffering latency.
+      let body: Uint8Array | undefined;
+      if (
+        this.config.modelAllowlistEnabled &&
+        (req.method === "POST" || req.method === "PUT" || req.method === "PATCH")
+      ) {
+        body = new Uint8Array(await req.arrayBuffer());
+      }
 
       const blocked = this.checkModelAllowlist(body, req.method);
       if (blocked) return blocked;

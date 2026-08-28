@@ -1,3 +1,6 @@
+[Unreleased]
+* Changed model allowlist enforcement to be disabled by default; set ROUTSTRD_AUTH_MODEL_ALLOWLIST=true to enable it
+
 [0.1.25]
 * Added a models allowlist to only allow whitelisted models through the proxy
 * Security: removed the hardcoded default admin npub from the Docker entrypoint; deployments must now bootstrap an admin explicitly
