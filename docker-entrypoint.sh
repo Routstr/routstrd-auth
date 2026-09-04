@@ -22,20 +22,43 @@ ROUTSTRD_UPSTREAM="${ROUTSTRD_UPSTREAM:-http://localhost:${ROUTSTRD_PORT}}"
 ROUTSTRD_AUTH_ADMIN_NPUBS="${ROUTSTRD_AUTH_ADMIN_NPUBS:-}"
 export ROUTSTRD_AUTH_PORT ROUTSTRD_AUTH_HOST ROUTSTRD_UPSTREAM ROUTSTRD_AUTH_ADMIN_NPUBS
 
-# Ensure routstrd's config.json has authUrl pointing to the auth proxy so the
-# CLI routes management commands (npubs, clients, usage) through it.
+# Ensure routstrd's config.json has authUrl pointing to the auth proxy and a Nostr identity.
 ROUTSTRD_CONFIG="${ROUTSTRD_DIR}/config.json"
 AUTH_URL="http://localhost:${ROUTSTRD_AUTH_PORT}"
-echo "Configuring authUrl (${AUTH_URL}) in ${ROUTSTRD_CONFIG}..."
-if [ -f "${ROUTSTRD_CONFIG}" ]; then
-  bun -e "
-    const c = JSON.parse(await Bun.file(process.argv[1]).text());
-    c.authUrl = process.argv[2];
-    await Bun.write(process.argv[1], JSON.stringify(c, null, 2));
-  " "${ROUTSTRD_CONFIG}" "${AUTH_URL}"
-else
-  echo "{\"authUrl\": \"${AUTH_URL}\"}" > "${ROUTSTRD_CONFIG}"
-fi
+echo "Configuring authUrl (${AUTH_URL}) and Nostr identity in ${ROUTSTRD_CONFIG}..."
+bun -e '
+  let nostrTools;
+  try {
+    nostrTools = await import("nostr-tools");
+  } catch {
+    try {
+      nostrTools = await import("/app/code/node_modules/nostr-tools");
+    } catch {
+      nostrTools = await import("/usr/local/bun/install/global/node_modules/routstrd/node_modules/nostr-tools");
+    }
+  }
+  const { generateSecretKey, nip19, getPublicKey } = nostrTools;
+  const configPath = process.argv[1];
+  const authUrl = process.argv[2];
+
+  let config = {};
+  try {
+    if (await Bun.file(configPath).exists()) {
+      config = JSON.parse(await Bun.file(configPath).text());
+    }
+  } catch {}
+
+  config.authUrl = authUrl;
+
+  if (!config.nsec) {
+    const sk = generateSecretKey();
+    config.nsec = nip19.nsecEncode(sk);
+    const npub = nip19.npubEncode(getPublicKey(sk));
+    console.log(`Generated container Nostr identity: ${npub}`);
+  }
+
+  await Bun.write(configPath, JSON.stringify(config, null, 2) + "\n");
+' "${ROUTSTRD_CONFIG}" "${AUTH_URL}"
 
 _term() {
   echo "Shutting down..."
