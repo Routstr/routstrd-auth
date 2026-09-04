@@ -2,9 +2,9 @@
 set -e
 
 # Ensure data directories exist for routstrd and cocod
+export ROUTSTRD_DIR="${ROUTSTRD_DIR:-/data/routstrd}"
 export COCOD_DIR="${COCOD_DIR:-/data/cocod}"
-mkdir -p "$COCOD_DIR"
-mkdir -p /data/logs
+mkdir -p "$ROUTSTRD_DIR" "$COCOD_DIR" /data/logs
 
 # Attempt to initialize cocod.
 # This is idempotent; if already initialized it typically exits non-zero
@@ -21,6 +21,21 @@ ROUTSTRD_UPSTREAM="${ROUTSTRD_UPSTREAM:-http://localhost:${ROUTSTRD_PORT}}"
 # bootstraps the first admin via unauthenticated POST /npubs (or sets the var).
 ROUTSTRD_AUTH_ADMIN_NPUBS="${ROUTSTRD_AUTH_ADMIN_NPUBS:-}"
 export ROUTSTRD_AUTH_PORT ROUTSTRD_AUTH_HOST ROUTSTRD_UPSTREAM ROUTSTRD_AUTH_ADMIN_NPUBS
+
+# Ensure routstrd's config.json has authUrl pointing to the auth proxy so the
+# CLI routes management commands (npubs, clients, usage) through it.
+ROUTSTRD_CONFIG="${ROUTSTRD_DIR}/config.json"
+AUTH_URL="http://localhost:${ROUTSTRD_AUTH_PORT}"
+echo "Configuring authUrl (${AUTH_URL}) in ${ROUTSTRD_CONFIG}..."
+if [ -f "${ROUTSTRD_CONFIG}" ]; then
+  bun -e "
+    const c = JSON.parse(await Bun.file(process.argv[1]).text());
+    c.authUrl = process.argv[2];
+    await Bun.write(process.argv[1], JSON.stringify(c, null, 2));
+  " "${ROUTSTRD_CONFIG}" "${AUTH_URL}"
+else
+  echo "{\"authUrl\": \"${AUTH_URL}\"}" > "${ROUTSTRD_CONFIG}"
+fi
 
 _term() {
   echo "Shutting down..."
