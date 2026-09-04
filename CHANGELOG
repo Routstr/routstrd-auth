@@ -1,5 +1,6 @@
-[Unreleased]
-* Changed model allowlist enforcement to be disabled by default; set ROUTSTRD_AUTH_MODEL_ALLOWLIST=true to enable it
+[0.1.26]
+* Model allowlist enforcement is now disabled by default; set ROUTSTRD_AUTH_MODEL_ALLOWLIST=true to enable it
+* Added a nullable name field to npubs (POST/PATCH/GET), with automatic DB migration for existing installs
 
 [0.1.25]
 * Added a models allowlist to only allow whitelisted models through the proxy
