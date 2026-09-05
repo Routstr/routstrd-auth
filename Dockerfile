@@ -32,7 +32,13 @@ RUN apt-get update \
 # Install routstrd daemon + cocod wallet CLI globally. The global install lives
 # under /usr/local/bun, not /root, so supervised processes running as cloudron
 # can execute the binaries on Cloudron's read-only root filesystem.
-RUN bun install --global @routstr/cocod routstrd \
+#
+# cocod is pinned to an exact version: it is a money-handling (Cashu wallet)
+# daemon, so an unpinned install is a supply-chain risk -- a malicious or buggy
+# newer publish would otherwise be pulled silently on every image build. Bump
+# COCOD_VERSION deliberately after reviewing the upstream release.
+ARG COCOD_VERSION=0.0.23
+RUN bun install --global "@routstr/cocod@${COCOD_VERSION}" routstrd \
     && ln -sf /usr/local/bun/bin/routstrd /usr/local/bin/routstrd \
     && ln -sf /usr/local/bun/bin/cocod /usr/local/bin/cocod \
     && test -f /usr/local/bun/install/global/node_modules/routstrd/dist/daemon/index.js
