@@ -1,16 +1,9 @@
 #!/bin/sh
 set -e
 
-# Ensure data directories exist for routstrd and cocod
+# Ensure data directories exist for routstrd
 export ROUTSTRD_DIR="${ROUTSTRD_DIR:-/data/routstrd}"
-export COCOD_DIR="${COCOD_DIR:-/data/cocod}"
-mkdir -p "$ROUTSTRD_DIR" "$COCOD_DIR" /data/logs
-
-# Attempt to initialize cocod.
-# This is idempotent; if already initialized it typically exits non-zero
-# with "already initialized", which we safely ignore.
-echo "Ensuring cocod wallet is initialized..."
-cocod init </dev/null 2>&1 || true
+mkdir -p "$ROUTSTRD_DIR" /data/logs
 
 # routstrd stays local to the container. routstrd-auth is the public service.
 ROUTSTRD_PORT="${ROUTSTRD_PORT:-${PORT:-8008}}"

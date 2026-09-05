@@ -28,7 +28,6 @@ All values have sensible defaults and can be overridden via environment variable
 | `ROUTSTRD_DB_PATH` | `~/.routstrd/routstr.db` | Shared SQLite DB |
 | `ROUTSTRD_AUTH_MODEL_ALLOWLIST` | `false` | Enable model allowlist enforcement (`true`/`false`) |
 | `ROUTSTRD_DIR` | `~/.routstrd` | Base config directory |
-| `COCOD_DIR` | `~/.cocod` | Wallet data directory |
 
 ## Cloudron
 
